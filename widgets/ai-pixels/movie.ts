@@ -186,16 +186,76 @@ function expandRow(raw: string, previous: string | undefined): string {
   return out;
 }
 
+/**
+ * Built-in 3×5 pixel font for the TEXT directive — the model hand-draws
+ * letters terribly, so we render them ourselves.
+ */
+const FONT: Record<string, string[]> = {
+  A: ['.X.', 'X.X', 'XXX', 'X.X', 'X.X'],
+  B: ['XX.', 'X.X', 'XX.', 'X.X', 'XX.'],
+  C: ['.XX', 'X..', 'X..', 'X..', '.XX'],
+  D: ['XX.', 'X.X', 'X.X', 'X.X', 'XX.'],
+  E: ['XXX', 'X..', 'XX.', 'X..', 'XXX'],
+  F: ['XXX', 'X..', 'XX.', 'X..', 'X..'],
+  G: ['.XX', 'X..', 'X.X', 'X.X', '.XX'],
+  H: ['X.X', 'X.X', 'XXX', 'X.X', 'X.X'],
+  I: ['XXX', '.X.', '.X.', '.X.', 'XXX'],
+  J: ['..X', '..X', '..X', 'X.X', '.X.'],
+  K: ['X.X', 'X.X', 'XX.', 'X.X', 'X.X'],
+  L: ['X..', 'X..', 'X..', 'X..', 'XXX'],
+  M: ['X.X', 'XXX', 'XXX', 'X.X', 'X.X'],
+  N: ['XX.', 'X.X', 'X.X', 'X.X', 'X.X'],
+  O: ['XXX', 'X.X', 'X.X', 'X.X', 'XXX'],
+  P: ['XXX', 'X.X', 'XXX', 'X..', 'X..'],
+  Q: ['XXX', 'X.X', 'X.X', 'XXX', '..X'],
+  R: ['XX.', 'X.X', 'XX.', 'X.X', 'X.X'],
+  S: ['.XX', 'X..', '.X.', '..X', 'XX.'],
+  T: ['XXX', '.X.', '.X.', '.X.', '.X.'],
+  U: ['X.X', 'X.X', 'X.X', 'X.X', 'XXX'],
+  V: ['X.X', 'X.X', 'X.X', 'X.X', '.X.'],
+  W: ['X.X', 'X.X', 'XXX', 'XXX', 'X.X'],
+  X: ['X.X', 'X.X', '.X.', 'X.X', 'X.X'],
+  Y: ['X.X', 'X.X', '.X.', '.X.', '.X.'],
+  Z: ['XXX', '..X', '.X.', 'X..', 'XXX'],
+  '0': ['XXX', 'X.X', 'X.X', 'X.X', 'XXX'],
+  '1': ['.X.', 'XX.', '.X.', '.X.', 'XXX'],
+  '2': ['XX.', '..X', '.X.', 'X..', 'XXX'],
+  '3': ['XXX', '..X', '.XX', '..X', 'XXX'],
+  '4': ['X.X', 'X.X', 'XXX', '..X', '..X'],
+  '5': ['XXX', 'X..', 'XX.', '..X', 'XX.'],
+  '6': ['.XX', 'X..', 'XXX', 'X.X', 'XXX'],
+  '7': ['XXX', '..X', '.X.', '.X.', '.X.'],
+  '8': ['XXX', 'X.X', 'XXX', 'X.X', 'XXX'],
+  '9': ['XXX', 'X.X', 'XXX', '..X', 'XX.'],
+  '.': ['...', '...', '...', '...', 'X..'],
+  '!': ['.X.', '.X.', '.X.', '...', '.X.'],
+  '?': ['XX.', '..X', '.X.', '...', '.X.'],
+  '-': ['...', '...', 'XXX', '...', '...'],
+  ':': ['...', '.X.', '...', '.X.', '...'],
+  ' ': ['...', '...', '...', '...', '...'],
+};
+
+export interface TextCommand {
+  x: number;
+  y: number;
+  color: string;
+  text: string;
+}
+
 /** Raw rows form the background, then sprites are blitted ("." = transparent) */
 function composeFrame(
   rawRows: string[],
   puts: { name: string; x: number; y: number }[],
+  texts: TextCommand[],
   sprites: Map<string, string[]>
 ): string[] {
   const canvas: string[][] = Array.from({ length: SCREEN_H }, (_, y) => {
     const src = rawRows[y] ?? '';
     return Array.from({ length: SCREEN_W }, (_, x) => src[x] ?? '.');
   });
+  const plot = (x: number, y: number, ch: string) => {
+    if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H) canvas[y][x] = ch;
+  };
   for (const put of puts) {
     const grid = sprites.get(put.name);
     if (!grid) continue;
@@ -203,10 +263,20 @@ function composeFrame(
       for (let sx = 0; sx < grid[sy].length; sx++) {
         const ch = grid[sy][sx];
         if (ch === undefined || ch === '.' || ch === ' ') continue; // transparent
-        const dx = put.x + sx;
-        const dy = put.y + sy;
-        if (dx >= 0 && dx < SCREEN_W && dy >= 0 && dy < SCREEN_H) canvas[dy][dx] = ch;
+        plot(put.x + sx, put.y + sy, ch);
       }
+    }
+  }
+  for (const cmd of texts) {
+    let cursorX = cmd.x;
+    for (const raw of cmd.text.toUpperCase()) {
+      const glyph = FONT[raw] ?? FONT[' '];
+      for (let gy = 0; gy < 5; gy++) {
+        for (let gx = 0; gx < 3; gx++) {
+          if (glyph[gy][gx] === 'X') plot(cursorX + gx, cmd.y + gy, cmd.color);
+        }
+      }
+      cursorX += 4; // 3px glyph + 1px spacing
     }
   }
   return canvas.map((row) => row.join(''));
