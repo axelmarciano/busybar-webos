@@ -47,17 +47,45 @@ function sanitize(value: string, maxLength = 140): string {
 const uploadedIcons = new Set<string>();
 
 /**
- * The default chime is a real firmware sound (the BUSY timer's finish chime),
- * copied once from the firmware's assets into notify's own assets — playing
- * directly from another app's directory silently no-ops.
+ * Synthesized two-tone chime (E6 → C6), uploaded once as WAV — the device
+ * plays uploaded WAVs reliably; its own .snd files don't decode from user
+ * assets, and "shared/" stock paths return OK without producing sound.
  */
-const FIRMWARE_CHIME = '/ext/apps_assets/busy/sounds/countdown_finish.snd';
+function chimeWav(): Buffer {
+  const RATE = 22_050;
+  const SECONDS = 0.42;
+  const samples = Math.floor(RATE * SECONDS);
+  const data = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const t = i / RATE;
+    const freq = t < 0.16 ? 1318 : 1046; // E6 then C6
+    const noteT = t < 0.16 ? t : t - 0.16;
+    const envelope = Math.min(1, noteT * 90) * Math.exp(-noteT * 9);
+    const sample = Math.sin(2 * Math.PI * freq * t) * envelope * 0.65;
+    data.writeInt16LE(Math.round(sample * 32767), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(RATE, 24);
+  header.writeUInt32LE(RATE * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
 let chimeReady = false;
 
 async function ensureChime(): Promise<void> {
   if (chimeReady) return;
-  const data = await bar.readStorage(FIRMWARE_CHIME);
-  await bar.uploadAsset(NOTIFY_APP, 'notification.snd', data);
+  await bar.uploadAsset(NOTIFY_APP, 'notification.wav', chimeWav());
   chimeReady = true;
 }
 
@@ -156,7 +184,7 @@ export async function sendNotification(opts: NotifyOptions): Promise<void> {
           : bar.playAudio(NOTIFY_APP, { path: opts.sound }));
       } else {
         await ensureChime();
-        await bar.playAudio(NOTIFY_APP, { path: 'notification.snd' });
+        await bar.playAudio(NOTIFY_APP, { path: 'notification.wav' });
       }
     } catch {
       // sound is best-effort — the visual notification already went through
