@@ -45,6 +45,9 @@ export function parseMovie(text: string): MovieFrame[] {
   const frames: MovieFrame[] = [];
   /** FRAME directives in definition order — the targets for AGAIN n */
   const definedFrames: MovieFrame[] = [];
+  /** PUT/TEXT lines found outside any FRAME — attached to the next frame */
+  const pendingPuts: { name: string; x: number; y: number }[] = [];
+  const pendingTexts: TextCommand[] = [];
   let loopStart = -1;
   let loopCount = 0;
 
@@ -83,8 +86,8 @@ export function parseMovie(text: string): MovieFrame[] {
     if (frameMatch) {
       inPalette = false;
       i++;
-      const puts: { name: string; x: number; y: number }[] = [];
-      const texts: TextCommand[] = [];
+      const puts = pendingPuts.splice(0);
+      const texts = pendingTexts.splice(0);
       const rawRows: string[] = [];
       let guard = 0;
       while (i < lines.length && guard++ < 64) {
@@ -149,6 +152,22 @@ export function parseMovie(text: string): MovieFrame[] {
       continue;
     }
 
+    // PUT/TEXT outside a FRAME (models do this for static images) — buffer for the next frame
+    const orphanPut = trimmed.match(/^PUT\s+(\S+)\s+(-?\d+)\s+(-?\d+)/i);
+    if (orphanPut) {
+      inPalette = false;
+      pendingPuts.push({ name: orphanPut[1].toLowerCase(), x: Number(orphanPut[2]), y: Number(orphanPut[3]) });
+      i++;
+      continue;
+    }
+    const orphanText = trimmed.match(/^TEXT\s+(-?\d+)\s+(-?\d+)\s+(\S)\s+(.+)$/i);
+    if (orphanText) {
+      inPalette = false;
+      pendingTexts.push({ x: Number(orphanText[1]), y: Number(orphanText[2]), color: orphanText[3], text: orphanText[4] });
+      i++;
+      continue;
+    }
+
     if (inPalette && trimmed !== '') {
       // "X 00FF00" / "X=#00ff00" / "X: 00FF00"
       const entry = trimmed.match(/^(\S)\s*[=:]?\s*#?([0-9a-fA-F]{6})\b/);
@@ -162,6 +181,14 @@ export function parseMovie(text: string): MovieFrame[] {
       }
     }
     i++;
+  }
+
+  // Commands but no FRAME at all → render them as a single static frame
+  if (frames.length === 0 && (pendingPuts.length > 0 || pendingTexts.length > 0)) {
+    frames.push({
+      pixels: rasterize(composeFrame([], pendingPuts, pendingTexts, sprites), palette),
+      durationMs: DEFAULT_FRAME_MS,
+    });
   }
 
   return frames;
