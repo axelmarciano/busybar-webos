@@ -150,6 +150,11 @@ export class BusyBarClient {
   }
 
   // --- System ---
+  /** Fast reachability check — throws if the device can't be reached quickly. */
+  async ping(): Promise<void> {
+    await this.req('GET', '/version', { timeoutMs: 3_000 });
+  }
+
   async version(): Promise<{ api_semver: string }> {
     return (await this.req('GET', '/version')).json() as Promise<{ api_semver: string }>;
   }

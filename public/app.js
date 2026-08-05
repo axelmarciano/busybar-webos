@@ -290,7 +290,7 @@ const trimmed = (obj) =>
 
 function friendlyTestError(message, mode) {
   if (mode === 'cloud' && /HTTP 40[13]/.test(message)) {
-    return 'The BUSY cloud rejected the token. Check it at cloud.busy.app/api-tokens, and make sure the bar is linked to your BUSY account and online — it needs Wi-Fi to reach the cloud.';
+    return 'The BUSY cloud rejected the token. Most common cause: the token was created with the “Account” scope — create one at cloud.busy.app/api-tokens with the “BUSY Bar” scope. Also check the bar is linked to your account and online.';
   }
   if (mode === 'wifi' && /HTTP 40[13]/.test(message)) {
     return 'The bar refused the request — Wi-Fi access is off or the access key is wrong.';
@@ -322,7 +322,7 @@ function connectionFieldsHtml(mode, d) {
   return `
     <div class="field"><label>API token</label>
       <input type="password" class="mono" data-k="cloud_token" value="${esc(d.cloud_token)}" />
-      <p class="hint">Create one at <a href="https://cloud.busy.app/api-tokens" target="_blank" rel="noreferrer">cloud.busy.app/api-tokens</a> — the bar must be linked to your BUSY account.</p></div>
+      <p class="hint">Create one at <a href="https://cloud.busy.app/api-tokens" target="_blank" rel="noreferrer">cloud.busy.app/api-tokens</a> with the <strong>BUSY Bar</strong> access scope (not “Account”) — the bar must be linked to your BUSY account.</p></div>
     <div class="field"><label>Cloud server <span class="opt">— leave as is unless you self-host</span></label>
       <input type="text" class="mono" data-k="cloud_url" value="${esc(d.cloud_url)}" placeholder="https://api.busy.app" /></div>`;
 }

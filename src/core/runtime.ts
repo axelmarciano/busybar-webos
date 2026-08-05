@@ -40,6 +40,13 @@ class Runtime {
       throw new Error(`Incomplete configuration: ${missing.join(', ')}`);
     }
 
+    // Refuse to launch against an unreachable device
+    try {
+      await bar.ping();
+    } catch {
+      throw new Error('Device is offline — check the connection in Settings before starting a widget');
+    }
+
     const log = new WidgetLogger(id);
     const widget = new def.ctor({
       id,
