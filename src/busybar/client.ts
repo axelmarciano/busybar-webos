@@ -25,8 +25,11 @@ export interface TextElement extends BaseElement {
   font: Font;
   color?: string;
   width?: number;
+  /** Pixels per minute (1000 ≈ 17 px/s); text scrolls when wider than `width` */
   scroll_rate?: number;
+  /** Milliseconds */
   scroll_start_delay?: number;
+  /** Milliseconds */
   scroll_repeat_delay?: number;
 }
 
@@ -62,6 +65,7 @@ export interface RectangleElement extends BaseElement {
   radius?: number;
   fill?: 'none' | 'solid' | 'gradient_h' | 'gradient_v';
   fill_colors?: string[];
+  /** Device default is 1 with a WHITE border — pass 0 unless you want it */
   border_width?: number;
   border_color?: string;
 }

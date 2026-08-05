@@ -51,6 +51,13 @@ function coerceValue(key: string, field: ConfigSchema[string], raw: unknown): un
       if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}FF`; // opaque by default
       throw new Error(`"${key}" must be a #RRGGBB or #RRGGBBAA color`);
     }
+    case 'select': {
+      const choice = String(raw);
+      if (!(field.options ?? []).some((option) => option.value === choice)) {
+        throw new Error(`"${key}" must be one of: ${(field.options ?? []).map((o) => o.value).join(', ')}`);
+      }
+      return choice;
+    }
     case 'location': {
       const match = String(raw).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
       if (!match) throw new Error(`"${key}" must be "latitude,longitude" (e.g. 48.8566,2.3522)`);
@@ -69,6 +76,27 @@ function coerceValue(key: string, field: ConfigSchema[string], raw: unknown): un
       return str;
     }
   }
+}
+
+/**
+ * Validates the values collected by the portal's launch modal (not persisted).
+ * Applies schema defaults, coerces provided values, throws on missing required fields.
+ */
+export function coerceLaunchValues(
+  schema: ConfigSchema,
+  raw: Record<string, unknown>
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(schema)) {
+    const value = raw[key];
+    if (value === undefined || value === null || value === '') {
+      if (field.default !== undefined) values[key] = field.default;
+      else if (field.required) throw new Error(`"${field.label || key}" is required to start this widget`);
+      continue;
+    }
+    values[key] = coerceValue(key, field, value);
+  }
+  return values;
 }
 
 /**

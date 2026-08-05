@@ -1,5 +1,5 @@
 import { bar } from '../busybar/client';
-import { getEffectiveConfig, missingRequiredKeys } from './config';
+import { coerceLaunchValues, getEffectiveConfig, missingRequiredKeys } from './config';
 import { clearErrorNotice, resetErrorThrottle, showErrorOnDevice } from './device-error';
 import { WidgetLogger } from './logger';
 import { registry } from './registry';
@@ -21,10 +21,13 @@ class Runtime {
     return this.statuses.get(id) ?? { state: 'stopped' };
   }
 
-  async start(id: string): Promise<void> {
+  async start(id: string, launch: Record<string, unknown> = {}): Promise<void> {
     const def = registry.get(id);
     if (!def) throw new Error(`Unknown widget: ${id}`);
     if (this.instances.has(id)) throw new Error(`Widget "${id}" is already running`);
+
+    // Validated before anything is stopped, so a bad launch value is a no-op
+    const launchValues = coerceLaunchValues(def.launchSchema, launch);
 
     // Exclusive mode: only one widget runs at a time — starting a new one stops the others
     for (const runningId of [...this.instances.keys()]) {
@@ -53,6 +56,7 @@ class Runtime {
       dir: def.dir,
       bar,
       config: getEffectiveConfig(id, def.configSchema),
+      launch: launchValues,
       log,
     });
 

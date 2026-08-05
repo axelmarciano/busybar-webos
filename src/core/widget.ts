@@ -12,7 +12,14 @@ export type ConfigFieldType =
   /** #RRGGBBAA — color picker in the portal */
   | 'color'
   /** "lat,lon" — browser geolocation in the portal, plain text fallback */
-  | 'location';
+  | 'location'
+  /** dropdown in the portal — requires `options` */
+  | 'select';
+
+export interface ConfigFieldOption {
+  value: string;
+  label?: string;
+}
 
 export interface ConfigField {
   type: ConfigFieldType;
@@ -21,6 +28,8 @@ export interface ConfigField {
   default?: string | number | boolean;
   /** Extra validation regex for string/secret values, checked on save */
   pattern?: string;
+  /** Choices for select fields; values are validated server-side */
+  options?: ConfigFieldOption[];
 }
 
 export type ConfigSchema = Record<string, ConfigField>;
@@ -30,6 +39,8 @@ export interface WidgetContext {
   dir: string;
   bar: BusyBarClient;
   config: Record<string, unknown>;
+  /** Values collected by the portal when the user clicks Start (see launchSchema) */
+  launch: Record<string, unknown>;
   log: WidgetLogger;
 }
 
@@ -45,13 +56,21 @@ export interface WidgetContext {
 export abstract class Widget {
   static title = 'Widget';
   static description = '';
+  /** Portal sort key — lower first, ties broken by id. */
+  static order = 0;
   static configSchema: ConfigSchema = {};
+  /**
+   * Fields the portal asks for in a modal each time the widget is started
+   * (unlike configSchema, values are not persisted). Empty = start immediately.
+   */
+  static launchSchema: ConfigSchema = {};
 
   /** Identifier = folder name under widgets/. Also used as application_name on the device. */
   readonly id: string;
   protected readonly dir: string;
   protected readonly bar: BusyBarClient;
   protected readonly config: Record<string, unknown>;
+  protected readonly launch: Record<string, unknown>;
   protected readonly log: WidgetLogger;
 
   private timers = new Set<NodeJS.Timeout>();
@@ -61,6 +80,7 @@ export abstract class Widget {
     this.dir = ctx.dir;
     this.bar = ctx.bar;
     this.config = ctx.config;
+    this.launch = ctx.launch;
     this.log = ctx.log;
   }
 
@@ -124,5 +144,7 @@ export abstract class Widget {
 export type WidgetClass = (new (ctx: WidgetContext) => Widget) & {
   title: string;
   description: string;
+  order: number;
   configSchema: ConfigSchema;
+  launchSchema: ConfigSchema;
 };

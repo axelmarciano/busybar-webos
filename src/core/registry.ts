@@ -8,7 +8,9 @@ export interface WidgetDefinition {
   dir: string;
   title: string;
   description: string;
+  order: number;
   configSchema: ConfigSchema;
+  launchSchema: ConfigSchema;
   ctor: WidgetClass;
 }
 
@@ -42,7 +44,9 @@ class Registry {
           dir,
           title: ctor.title ?? id,
           description: ctor.description ?? '',
+          order: ctor.order ?? 0,
           configSchema: ctor.configSchema ?? {},
+          launchSchema: ctor.launchSchema ?? {},
           ctor,
         });
       } catch (err) {
@@ -53,7 +57,9 @@ class Registry {
   }
 
   list(): WidgetDefinition[] {
-    return [...this.defs.values()];
+    return [...this.defs.values()].sort(
+      (a, b) => a.order - b.order || a.id.localeCompare(b.id)
+    );
   }
 
   get(id: string): WidgetDefinition | undefined {

@@ -63,6 +63,7 @@ Restart the server (or let `pnpm dev` reload) to pick up new widgets.
 | Member | Purpose |
 | --- | --- |
 | `this.config` | Effective config values (schema defaults + portal overrides) |
+| `this.launch` | Values from the Start modal (see launchSchema), fresh on every start |
 | `this.log` | Per-widget logger (`info/warn/error/debug`), visible in the portal |
 | `this.every(ms, fn)` | Run `fn` now and on an interval; auto-cleaned on stop |
 | `this.draw(elements, opts?)` | Draw on the device (`application_name` injected) |
@@ -80,8 +81,13 @@ Config field types:
 | `boolean` | checkbox | boolean |
 | `color` | color picker | `#RRGGBBAA` (device format) |
 | `location` | "use my location" + text fallback | `"lat,lon"` |
+| `select` | dropdown (requires `options: [{value, label?}]`) | string (one of the option values) |
 
 Mark fields `required: true` to block start until they're set. Values are validated server-side on save — an invalid value (bad color, malformed coordinates, regex mismatch…) returns 400 and nothing is stored.
+
+### Launch fields
+
+A widget can also declare `static launchSchema` (same field format as `configSchema`). When it's non-empty, clicking **Start** in the portal opens a modal asking for those values; they are validated (`coerceLaunchValues`), passed to the widget as `this.launch`, and **not persisted** — every start asks again. Example: the `ai-pixels` widget asks for a prompt and a movie duration.
 
 ### Preview image
 
@@ -100,7 +106,7 @@ The front display is 72×16 px; keep drawings small. See the device OpenAPI spec
 The portal is a thin client over the server API:
 
 - `GET /api/widgets`, `GET /api/widgets/:id`
-- `POST /api/widgets/:id/start`, `POST /api/widgets/:id/stop`
+- `POST /api/widgets/:id/start` (body: `{launch: {...}}` for widgets with a launchSchema), `POST /api/widgets/:id/stop`
 - `PUT /api/widgets/:id/config`
 - `GET /api/widgets/:id/logs?limit=100`
 - `GET|PUT /api/settings`

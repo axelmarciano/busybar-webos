@@ -27,6 +27,7 @@ export function createServer(): express.Express {
         id: def.id,
         title: def.title,
         description: def.description,
+        launchSchema: def.launchSchema,
         has_preview: previewFile(def.id) !== null,
         ...runtime.statusOf(def.id),
       }))
@@ -44,6 +45,7 @@ export function createServer(): express.Express {
       title: def.title,
       description: def.description,
       configSchema: def.configSchema,
+      launchSchema: def.launchSchema,
       config: getStoredConfig(def.id),
       has_preview: previewFile(def.id) !== null,
       ...runtime.statusOf(def.id),
@@ -60,7 +62,8 @@ export function createServer(): express.Express {
   });
 
   app.post('/api/widgets/:id/start', wrap(async (req, res) => {
-    await runtime.start(req.params.id);
+    const { launch } = (req.body ?? {}) as { launch?: Record<string, unknown> };
+    await runtime.start(req.params.id, launch ?? {});
     res.json({ result: 'OK' });
   }));
 

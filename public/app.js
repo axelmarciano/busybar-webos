@@ -38,6 +38,62 @@ function esc(s) {
 
 const STATE_LABELS = { running: 'Running', stopped: 'Stopped', error: 'Error' };
 
+// --- Launch modal (widgets with a launchSchema ask for values on Start) ---
+
+function selectHtml(key, field, current) {
+  return `<select name="${esc(key)}">${(field.options || []).map((o) =>
+    `<option value="${esc(o.value)}" ${o.value === String(current) ? 'selected' : ''}>${esc(o.label || o.value)}</option>`
+  ).join('')}</select>`;
+}
+
+function promptLaunchValues(widget) {
+  return new Promise((resolve) => {
+    const schema = widget.launchSchema || {};
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <form class="panel modal">
+        <h2 style="margin-top: 0;">Start ${esc(widget.title)}</h2>
+        ${Object.entries(schema).map(([key, field]) => {
+          const label = `${esc(field.label || key)}${field.required ? ' <span class="required">*</span>' : ''}`;
+          if (field.type === 'select') {
+            return `<div class="field"><label>${label}</label>${selectHtml(key, field, field.default ?? '')}</div>`;
+          }
+          const placeholder = field.default !== undefined ? `default: ${esc(field.default)}` : '';
+          const inputType = field.type === 'number' ? 'number' : 'text';
+          return `<div class="field"><label>${label}</label>
+            <input type="${inputType}" name="${esc(key)}" placeholder="${placeholder}"
+              ${field.type === 'number' ? 'step="any"' : ''} autocomplete="off" /></div>`;
+        }).join('')}
+        <div class="form-actions">
+          <button class="primary" type="submit">Start</button>
+          <button type="button" data-cancel>Cancel</button>
+        </div>
+      </form>
+    `;
+
+    const close = (result) => {
+      overlay.remove();
+      resolve(result);
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+    overlay.querySelector('[data-cancel]').addEventListener('click', () => close(null));
+    overlay.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const values = {};
+      for (const key of Object.keys(schema)) {
+        const raw = overlay.querySelector(`[name="${key}"]`).value;
+        if (raw !== '') values[key] = raw;
+      }
+      close(values);
+    });
+
+    document.body.appendChild(overlay);
+    const first = overlay.querySelector('input');
+    if (first) first.focus();
+  });
+}
+
 // --- Device status polling (sidebar) ---
 
 async function pollDevice() {
@@ -120,9 +176,15 @@ async function renderWidgets() {
 
   app.querySelectorAll('[data-start]').forEach((btn) =>
     btn.addEventListener('click', async () => {
+      const widget = widgets.find((w) => w.id === btn.dataset.start);
+      let launch = {};
+      if (widget && Object.keys(widget.launchSchema || {}).length > 0) {
+        launch = await promptLaunchValues(widget);
+        if (launch === null) return; // cancelled
+      }
       btn.disabled = true;
       try {
-        await api('POST', `/api/widgets/${btn.dataset.start}/start`);
+        await api('POST', `/api/widgets/${btn.dataset.start}/start`, { launch });
         toast(`${btn.dataset.start} started`);
       } catch (err) {
         toast(err.message, true);
@@ -186,6 +248,10 @@ async function renderWidgetDetail(id) {
                 <input type="color" name="${esc(key)}" value="${esc(current.slice(0, 7))}" />
                 <code class="color-code">${esc(current)}</code>
               </div></div>`;
+          }
+          if (field.type === 'select') {
+            return `<div class="field"><label>${label}</label>
+              ${selectHtml(key, field, value !== '' ? value : field.default ?? '')}</div>`;
           }
           if (field.type === 'location') {
             return `<div class="field"><label>${label}</label>
