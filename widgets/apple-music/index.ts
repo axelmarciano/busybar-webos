@@ -5,6 +5,7 @@ export default class AppleMusicWidget extends NowPlayingWidget {
   static description =
     'Track currently playing in Apple Music (macOS & Windows, iTunes included), with progress bar.';
   static tags = ['music'];
+  static author = 'axelmarciano';
   // Music widgets grouped at the end of the portal list
   static order = 10;
 

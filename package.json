@@ -2,6 +2,7 @@
   "name": "busybar-webos",
   "version": "0.1.0",
   "description": "A widget runtime + web portal for the BUSY Bar — including AI-generated pixel movies on demand",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "busybar-webos": "bin/busybar-webos.js"

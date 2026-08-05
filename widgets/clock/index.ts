@@ -27,6 +27,7 @@ export default class ClockWidget extends Widget {
   static title = 'Clock';
   static description = 'Full-width dot-matrix clock.';
   static tags = ['clock', 'time'];
+  static author = 'axelmarciano';
   static configSchema = {
     showSeconds: { type: 'boolean' as const, label: 'Show seconds', default: true },
   };

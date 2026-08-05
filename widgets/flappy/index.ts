@@ -50,6 +50,7 @@ export default class FlappyWidget extends Widget {
   static description =
     "Flappy on 72x16 LEDs — flip the side switch to OFF, then flap with the bar's button or wheel. Needs USB or Wi-Fi (no cloud).";
   static tags = ['fun', 'game'];
+  static author = 'axelmarciano';
   static configSchema = {
     gap: {
       type: 'number' as const,

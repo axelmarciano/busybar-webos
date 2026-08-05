@@ -51,6 +51,7 @@ export default class WeatherWidget extends Widget {
   static title = 'Weather';
   static description = 'Current conditions + forecast via Open-Meteo, full-screen rotating pages.';
   static tags = ['weather', 'info'];
+  static author = 'axelmarciano';
   static configSchema = {
     location: {
       type: 'location' as const,

@@ -37,6 +37,8 @@ import { Widget } from '../../src/core/widget';
 export default class MyWidget extends Widget {
   static title = 'My Widget';
   static description = 'What it does.';
+  static tags = ['tools'];
+  static author = 'your-github-username'; // shown and linked on the widget card
   static configSchema = {
     githubApiToken: { type: 'secret' as const, label: 'GitHub token', required: true },
     refreshMinutes: { type: 'number' as const, default: 5 },

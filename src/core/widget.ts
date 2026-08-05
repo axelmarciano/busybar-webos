@@ -64,6 +64,8 @@ export abstract class Widget {
   static order = 0;
   /** Portal categories used for filtering, e.g. ['music', 'productivity'] */
   static tags: string[] = [];
+  /** GitHub username of the widget's author, shown and linked in the portal */
+  static author = '';
   static configSchema: ConfigSchema = {};
   /**
    * Fields the portal asks for in a modal each time the widget is started
@@ -201,6 +203,7 @@ export type WidgetClass = (new (ctx: WidgetContext) => Widget) & {
   description: string;
   order: number;
   tags: string[];
+  author: string;
   configSchema: ConfigSchema;
   launchSchema: ConfigSchema;
   dynamicLaunchSchema?: () => ConfigSchema;

@@ -28,6 +28,9 @@ export async function render({ root, params, alive }) {
       </div>
     </div>
     <p class="detail-desc">${esc(widget.description)}</p>
+    ${widget.author
+      ? `<a class="author" href="https://github.com/${esc(widget.author)}" target="_blank" rel="noreferrer">by @${esc(widget.author)}</a>`
+      : ''}
     ${(widget.tags || []).length
       ? `<div class="tags" style="margin-top: 12px;">${widget.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
       : ''}

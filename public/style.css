@@ -197,6 +197,13 @@ h2 { font-size: 16px; margin: 28px 0 12px; color: var(--muted); text-transform: 
 }
 .chip:hover { color: var(--text); }
 .chip.active { border-color: var(--accent); color: var(--accent); background: rgba(234, 82, 18, 0.08); }
+.author {
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+  width: fit-content;
+}
+.author:hover { color: var(--accent); }
 .tags { display: flex; gap: 5px; flex-wrap: wrap; }
 .tag {
   font-size: 10px;

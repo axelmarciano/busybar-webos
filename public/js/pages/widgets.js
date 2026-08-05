@@ -21,7 +21,10 @@ function widgetCardHtml(w, tab) {
   const tags = (w.tags || []).length
     ? `<div class="tags">${(w.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
     : '';
-  const searchable = [w.id, w.title, w.description, ...(w.tags || [])].join(' ').toLowerCase();
+  const author = w.author
+    ? `<a class="author" href="https://github.com/${esc(w.author)}" target="_blank" rel="noreferrer">by @${esc(w.author)}</a>`
+    : '';
+  const searchable = [w.id, w.title, w.description, w.author, ...(w.tags || [])].join(' ').toLowerCase();
   const open = `<div class="card" data-search="${esc(searchable)}" data-tags="${esc((w.tags || []).join(','))}">`;
 
   if (tab === 'all') {
@@ -32,6 +35,7 @@ function widgetCardHtml(w, tab) {
         ${w.installed ? '<span class="badge installed">Installed</span>' : ''}
       </div>
       <p>${esc(w.description)}</p>
+      ${author}
       ${tags}
       <div class="actions">
         ${w.installed
@@ -50,6 +54,7 @@ function widgetCardHtml(w, tab) {
     </div>
     <p>${esc(w.description)}</p>
     ${w.error ? `<p style="color: var(--red); font-size: 12px;">${esc(w.error)}</p>` : ''}
+    ${author}
     ${tags}
     <div class="actions">
       ${w.state === 'running' || w.state === 'error'

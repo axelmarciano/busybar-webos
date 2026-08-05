@@ -32,6 +32,7 @@ export default class DecibelWidget extends Widget {
   static description =
     'Live sound level from your computer mic, captured in the browser. Open the widget page and enable the microphone.';
   static tags = ['tools', 'audio'];
+  static author = 'axelmarciano';
   static browserSources = ['microphone'];
   static configSchema = {
     calibration: {

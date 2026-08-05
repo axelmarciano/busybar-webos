@@ -5,6 +5,7 @@ export default class SpotifyWidget extends NowPlayingWidget {
   static description =
     'Track currently playing in the Spotify desktop app (macOS & Windows), with progress bar.';
   static tags = ['music'];
+  static author = 'axelmarciano';
   // Music widgets grouped at the end of the portal list
   static order = 10;
 

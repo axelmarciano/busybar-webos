@@ -66,6 +66,7 @@ export default class AiPixelsWidget extends Widget {
   static description =
     'Give the AI a prompt ("cozy fireplace", "Stitch vs King Kong"…) — it composes a full pixel movie, frames and timing included, and takes over the display.';
   static tags = ['fun', 'ai', 'animation'];
+  static author = 'axelmarciano';
 
   /** Cross-field rules, enforced on every save: no key-less API provider, no mismatched model. */
   static validateConfig(config: Record<string, unknown>): void {

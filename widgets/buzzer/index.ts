@@ -7,6 +7,7 @@ export default class BuzzerWidget extends Widget {
   static description =
     "A game-show buzzer: press the bar's physical button — it flashes red and makes the noise. Needs a USB or Wi-Fi connection (no cloud).";
   static tags = ['fun', 'party'];
+  static author = 'axelmarciano';
   static configSchema = {
     volume: { type: 'number' as const, label: 'Volume (0-100)', default: 80 },
     priority: {

@@ -9,6 +9,7 @@ export default class NyanWidget extends Widget {
   static title = 'Nyan Cat';
   static description = 'The rainbow cat, looping on the front display. Pure joy, zero productivity.';
   static tags = ['fun', 'animation'];
+  static author = 'axelmarciano';
   static configSchema = {
     fps: { type: 'number' as const, label: 'Frames per second (1-15)', default: 8, min: 1, max: 15 },
     priority: {

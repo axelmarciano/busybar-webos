@@ -11,6 +11,7 @@ export interface WidgetDefinition {
   description: string;
   order: number;
   tags: string[];
+  author: string;
   configSchema: ConfigSchema;
   launchSchema: ConfigSchema;
   browserSources: string[];
@@ -55,6 +56,7 @@ class Registry {
           description: ctor.description ?? '',
           order: ctor.order ?? 0,
           tags: ctor.tags ?? [],
+          author: ctor.author ?? '',
           configSchema: ctor.configSchema ?? {},
           launchSchema: ctor.launchSchema ?? {},
           browserSources: ctor.browserSources ?? [],

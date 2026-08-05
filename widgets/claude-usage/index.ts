@@ -105,6 +105,7 @@ export default class ClaudeUsageWidget extends Widget {
   static description =
     'Your Claude plan limits, live — current session and weekly bars, same data as the app\'s "Plan usage limits" screen. Works on macOS, Windows and Linux.';
   static tags = ['dev', 'ai'];
+  static author = 'axelmarciano';
   static configSchema = {
     refreshMinutes: { type: 'number' as const, label: 'Refresh every N minutes', default: 2, min: 1, max: 1440 },
     priority: { type: 'number' as const, label: 'Draw priority (1-100)', default: 60, min: 1, max: 100 },
