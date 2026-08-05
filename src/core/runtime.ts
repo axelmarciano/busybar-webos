@@ -1,4 +1,5 @@
 import { bar } from '../busybar/client';
+import { deviceEvents } from '../busybar/state-stream';
 import { coerceLaunchValues, getEffectiveConfig, missingRequiredKeys } from './config';
 import { isInstalled } from './installed';
 import { clearErrorNotice, resetErrorThrottle, showErrorOnDevice } from './device-error';
@@ -67,6 +68,16 @@ class Runtime {
       await widget.start();
       this.instances.set(id, widget);
       this.statuses.set(id, { state: 'running', startedAt: Date.now() });
+      // Physical buttons / switch / encoder — streamed only when the widget wants them
+      if (typeof widget.onDeviceEvent === 'function') {
+        deviceEvents.acquire(id, (event) => {
+          try {
+            widget.onDeviceEvent?.(event);
+          } catch (err) {
+            log.error(`onDeviceEvent failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+      }
     } catch (err) {
       widget._dispose();
       const message = err instanceof Error ? err.message : String(err);
@@ -91,6 +102,7 @@ class Runtime {
 
     widget._dispose();
     this.instances.delete(id);
+    deviceEvents.release(id);
     const log = new WidgetLogger(id);
     try {
       await widget.stop();

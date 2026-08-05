@@ -1,6 +1,9 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { createRequire } from 'node:module';
 import { deviceFrameToBmp } from './frame';
 import { publicDir } from './paths';
+
+const swaggerUiAssetPath = createRequire(import.meta.url)('swagger-ui-dist').absolutePath() as string;
 import { previewFile } from './core/preview';
 import { bar, BusyBarClient, type HttpAccessMode } from './busybar/client';
 import {
@@ -27,6 +30,8 @@ export function createServer(): express.Express {
   const app = express();
   app.use(express.json());
   app.use(express.static(publicDir));
+  // Swagger UI assets for the portal's API docs page (/api-docs.html)
+  app.use('/swagger-ui', express.static(swaggerUiAssetPath));
 
   const wrap =
     (fn: (req: Request, res: Response) => Promise<void> | void) =>

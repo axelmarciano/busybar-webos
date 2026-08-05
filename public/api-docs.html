@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>BUSY Web OS — API</title>
+  <link rel="stylesheet" href="/swagger-ui/swagger-ui.css" />
+  <style>
+    /* Dark theme matching the portal */
+    html, body { background: #0d1017; }
+    .swagger-ui, .swagger-ui .info .title, .swagger-ui .info li, .swagger-ui .info p,
+    .swagger-ui .opblock-tag, .swagger-ui .opblock .opblock-summary-description,
+    .swagger-ui table thead tr th, .swagger-ui table thead tr td,
+    .swagger-ui .parameter__name, .swagger-ui .parameter__type,
+    .swagger-ui .response-col_status, .swagger-ui .response-col_description,
+    .swagger-ui .model, .swagger-ui .model-title, .swagger-ui label,
+    .swagger-ui .tab li, .swagger-ui section.models h4, .swagger-ui .opblock-description-wrapper p {
+      color: #e6e9f0 !important;
+    }
+    .swagger-ui .info a { color: #ea5212 !important; }
+    .swagger-ui .opblock-tag { border-bottom: 1px solid #2a3244; }
+    .swagger-ui .opblock { background: #161b26; border-color: #2a3244; box-shadow: none; }
+    .swagger-ui .opblock .opblock-section-header { background: #1d2433; }
+    .swagger-ui .opblock .opblock-section-header h4 { color: #e6e9f0; }
+    .swagger-ui section.models { border: 1px solid #2a3244; }
+    .swagger-ui section.models .model-container { background: #161b26; }
+    .swagger-ui .scheme-container { background: #161b26; box-shadow: none; }
+    .swagger-ui .opblock .opblock-summary-path, .swagger-ui .opblock .opblock-summary-path__deprecated {
+      color: #e6e9f0;
+    }
+    .swagger-ui .btn { color: #e6e9f0; border-color: #2a3244; }
+    .swagger-ui select, .swagger-ui input[type=text] { background: #0d1017; color: #e6e9f0; border-color: #2a3244; }
+    .swagger-ui .topbar { display: none; }
+    .swagger-ui .parameter__in, .swagger-ui .prop-format { color: #8a93a6 !important; }
+    .swagger-ui .markdown p, .swagger-ui .markdown li { color: #b7bfcc; }
+    .swagger-ui .responses-inner h4, .swagger-ui .responses-inner h5 { color: #e6e9f0; }
+  </style>
+</head>
+<body>
+  <div id="swagger"></div>
+  <script src="/swagger-ui/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: '/openapi.yaml',
+      dom_id: '#swagger',
+      docExpansion: 'list',
+      defaultModelsExpandDepth: 0,
+      tryItOutEnabled: true,
+    });
+  </script>
+</body>
+</html>

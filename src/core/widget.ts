@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { BusyBarClient, DisplayElement } from '../busybar/client';
+import type { DeviceInputEvent } from '../busybar/state-stream';
 import { showErrorOnDevice } from './device-error';
 import type { WidgetLogger } from './logger';
 
@@ -93,7 +94,7 @@ export abstract class Widget {
    * For data only the user's browser can produce: the portal renders a
    * capture panel for each source on the widget's page and streams payloads
    * to onMessage() while the widget runs. Source implementations live in the
-   * portal (public/app.js, `browserSources` registry).
+   * portal (public/js/captures.js, `browserSources` registry).
    */
   static browserSources: string[] = [];
 
@@ -127,6 +128,14 @@ export abstract class Widget {
    * widget is running — e.g. live data captured in the browser (mic level).
    */
   onMessage?(payload: unknown): void;
+
+  /**
+   * Called for physical device input while the widget runs: buttons (OK /
+   * BACK / START press+release), the mode switch, the encoder. Declaring
+   * this hook makes the runtime open the bar's state WebSocket (USB or
+   * Wi-Fi connection required — not available through the cloud).
+   */
+  onDeviceEvent?(event: DeviceInputEvent): void;
 
   /**
    * Runs fn immediately, then every `ms` milliseconds.

@@ -1,13 +1,12 @@
 import { Widget } from '../../src/core/widget';
+import type { DeviceInputEvent } from '../../src/busybar/state-stream';
 import { buzzerWav } from './sound';
 
 export default class BuzzerWidget extends Widget {
   static title = 'Buzzer';
   static description =
-    'A game-show buzzer: smash the big red button in the portal (open it on your phone!) — the bar flashes red and makes the noise.';
+    "A game-show buzzer: press the bar's physical button — it flashes red and makes the noise. Needs a USB or Wi-Fi connection (no cloud).";
   static tags = ['fun', 'party'];
-  /** The button lives in the portal — same channel as the decibel mic */
-  static browserSources = ['buzzer'];
   static configSchema = {
     volume: { type: 'number' as const, label: 'Volume (0-100)', default: 80 },
     priority: {
@@ -35,9 +34,10 @@ export default class BuzzerWidget extends Widget {
     if (this.idleTimer) clearTimeout(this.idleTimer);
   }
 
-  onMessage(payload: unknown): void {
-    const data = payload as { press?: boolean } | undefined;
-    if (data?.press) void this.buzz();
+  /** Physical bar input: any button press buzzes */
+  onDeviceEvent(event: DeviceInputEvent): void {
+    this.log.debug(`device event: ${JSON.stringify(event)}`);
+    if (event.buttonEvent?.action === 'PRESS') void this.buzz();
   }
 
   private async drawIdle(): Promise<void> {

@@ -1,0 +1,477 @@
+openapi: 3.1.0
+info:
+  title: BUSY Web OS API
+  description: |
+    HTTP API of the BUSY Web OS server — the widget runtime and portal backend
+    for the [BUSY Bar](https://busy.bar).
+
+    Everything the portal does goes through this API, so anything you see in the
+    dashboard can be automated: install and start widgets, push notifications,
+    read logs, manage the device connection.
+
+    Real-time screen preview is available over WebSocket at `ws://<host>/ws/screen`
+    — the server pushes `{type: "screen", display: 0, bmp: "<base64 BMP>"}`
+    whenever the front display changes.
+  version: 1.0.0
+servers:
+  - url: /
+tags:
+  - name: Widgets
+    description: Catalog, install lifecycle, start/stop, config and logs
+  - name: Notifications
+    description: Phone-style notifications on the bar
+  - name: Settings
+    description: Portal ↔ device connection settings
+  - name: Device
+    description: Proxied device information
+
+paths:
+  /api/widgets:
+    get:
+      tags: [Widgets]
+      summary: List all widgets
+      description: Every widget found in the widgets directories, with install/run state and tags.
+      responses:
+        '200':
+          description: Widget list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WidgetSummary'
+
+  /api/widgets/{id}:
+    get:
+      tags: [Widgets]
+      summary: Widget details
+      description: Adds the config schema, stored config values and missing required keys.
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      responses:
+        '200':
+          description: Widget detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WidgetDetail'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/widgets/{id}/install:
+    post:
+      tags: [Widgets]
+      summary: Install a widget
+      description: |
+        Makes the widget startable and lists it under "Installed widgets".
+        Refused (400) when required config fields are missing, or when the
+        widget's own install check fails (LLM access, platform, system consent…).
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Widgets]
+      summary: Uninstall a widget
+      description: Stops the widget if running, removes it from the installed list and deletes its stored config.
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/widgets/{id}/start:
+    post:
+      tags: [Widgets]
+      summary: Start a widget
+      description: |
+        Only one widget runs at a time — starting one stops the previous one.
+        Requires the widget to be installed and the device to be reachable.
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                launch:
+                  type: object
+                  description: Values for the widget's launchSchema (e.g. the AI Pixels prompt)
+                  additionalProperties: true
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '500': { $ref: '#/components/responses/BadRequest' }
+
+  /api/widgets/{id}/stop:
+    post:
+      tags: [Widgets]
+      summary: Stop a widget
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '500': { $ref: '#/components/responses/BadRequest' }
+
+  /api/widgets/{id}/message:
+    post:
+      tags: [Widgets]
+      summary: Send data to a running widget
+      description: |
+        Delivers an arbitrary JSON payload to the running widget's `onMessage()`.
+        Used by the portal's browser sources (e.g. mic levels for the Decibel widget).
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '409':
+          description: Widget is not running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/widgets/{id}/config:
+    put:
+      tags: [Widgets]
+      summary: Save widget configuration
+      description: |
+        The whole payload is validated first (types, bounds, patterns, and the
+        widget's own cross-field rules) — nothing is stored if any value is invalid.
+        Empty values delete the stored key.
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example: { location: "48.8566,2.3522" }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/widgets/{id}/logs:
+    get:
+      tags: [Widgets]
+      summary: Widget logs
+      description: Newest first. Also available as clipboard copy in the portal.
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        '200':
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogEntry'
+
+  /api/widgets/{id}/preview:
+    get:
+      tags: [Widgets]
+      summary: Widget preview image
+      description: The preview image shipped by the widget author (png/bmp/jpg/webp).
+      parameters:
+        - $ref: '#/components/parameters/WidgetId'
+      responses:
+        '200':
+          description: Image
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/notify:
+    post:
+      tags: [Notifications]
+      summary: Show a notification on the bar
+      description: |
+        Phone-style notification: icon on the left, bold title, scrolling text,
+        LED blink in the icon's color and a notification chime. Auto-expires.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotifyRequest'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    get:
+      tags: [Notifications]
+      summary: Notification history
+      description: The last 100 notifications, newest first.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: Stored notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoredNotification'
+    delete:
+      tags: [Notifications]
+      summary: Clear the notification history
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /api/settings:
+    get:
+      tags: [Settings]
+      summary: Get portal settings
+      responses:
+        '200':
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+    put:
+      tags: [Settings]
+      summary: Update portal settings
+      description: |
+        Connection changes are probed first — a configuration under which the
+        bar is unreachable is refused (400) and nothing is saved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/device/status:
+    get:
+      tags: [Device]
+      summary: Device status (proxied)
+      description: Firmware, system and power info straight from the bar.
+      responses:
+        '200':
+          description: Device status
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/device/test:
+    post:
+      tags: [Device]
+      summary: Probe a candidate connection
+      description: Form values are merged over the saved settings and probed without saving anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: The bar answered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  api_semver: { type: string }
+                  status: { type: object, additionalProperties: true }
+
+  /api/device/access:
+    get:
+      tags: [Device]
+      summary: The bar's Wi-Fi HTTP access setting
+      responses:
+        '200':
+          description: Access mode
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [disabled, enabled, key] }
+                  key_valid: { type: boolean }
+    post:
+      tags: [Device]
+      summary: Change the bar's Wi-Fi HTTP access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [disabled, enabled, key] }
+                key: { type: string, pattern: '^[0-9]{4,10}$' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/device/screen:
+    get:
+      tags: [Device]
+      summary: Current screen frame
+      description: One frame of a display as a BMP image (for live preview, prefer the `/ws/screen` WebSocket).
+      parameters:
+        - name: display
+          in: query
+          schema: { type: integer, enum: [0, 1], default: 0 }
+          description: 0 = front, 1 = back
+      responses:
+        '200':
+          description: BMP frame
+          content:
+            image/bmp:
+              schema: { type: string, format: binary }
+
+components:
+  parameters:
+    WidgetId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: weather
+
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              result: { type: string, example: OK }
+    BadRequest:
+      description: Invalid request — the error message says what to fix
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Unknown widget
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: 'Configuration required before install: location' }
+
+    WidgetSummary:
+      type: object
+      properties:
+        id: { type: string, example: weather }
+        title: { type: string, example: Weather }
+        description: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+          example: [weather, info]
+        installed: { type: boolean }
+        config_ok: { type: boolean, description: All required config fields are set }
+        state: { type: string, enum: [running, stopped, error] }
+        startedAt: { type: integer, description: Unix ms, present when running }
+        error: { type: string, description: Last start error, present in error state }
+        has_preview: { type: boolean }
+        launchSchema: { type: object, additionalProperties: true }
+        browser_sources:
+          type: array
+          items: { type: string }
+          example: [microphone]
+
+    WidgetDetail:
+      allOf:
+        - $ref: '#/components/schemas/WidgetSummary'
+        - type: object
+          properties:
+            configSchema:
+              type: object
+              additionalProperties: true
+              description: 'Field definitions: string/secret/number/boolean/color/location/select'
+            config:
+              type: object
+              additionalProperties: true
+              description: Stored values (defaults not included)
+            missing_required:
+              type: array
+              items: { type: string }
+
+    LogEntry:
+      type: object
+      properties:
+        id: { type: integer }
+        level: { type: string, enum: [debug, info, warn, error] }
+        message: { type: string }
+        created_at: { type: integer, description: Unix ms }
+
+    NotifyRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, description: 'Body text (printable ASCII)', example: busybar-webos v1.2 is live }
+        title: { type: string, description: Bold first line, example: Deploy done }
+        icon:
+          type: string
+          enum: [info, success, warning, error, message, bell]
+          default: info
+        duration: { type: integer, default: 6, minimum: 1, maximum: 300, description: Seconds on screen }
+        priority: { type: integer, default: 95, minimum: 1, maximum: 100, description: 95 shows over a running BUSY session }
+        sound:
+          description: false = silent, or a custom sound path (shared/… stock path or notify asset)
+          oneOf:
+            - { type: boolean }
+            - { type: string }
+        led: { type: string, description: 'LED blink override, #RRGGBBAA', example: '#FF0000FF' }
+
+    StoredNotification:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        text: { type: string }
+        icon: { type: string }
+        duration: { type: integer }
+        priority: { type: integer }
+        created_at: { type: integer, description: Unix ms }
+
+    Settings:
+      type: object
+      properties:
+        access_mode: { type: string, enum: [local, wifi, cloud] }
+        local_url: { type: string, example: 'http://10.0.4.20' }
+        wifi_url: { type: string, example: 'http://192.168.1.42' }
+        cloud_url: { type: string, example: 'https://api.busy.app' }
+        cloud_token: { type: string, description: Bearer token from cloud.busy.app/api-tokens (BUSY Bar scope) }
+        api_token: { type: string, description: Wi-Fi access key, sent as X-API-Token }
