@@ -151,6 +151,7 @@ h2 { font-size: 16px; margin: 28px 0 12px; color: var(--muted); text-transform: 
 .badge.stopped { background: var(--panel-2); color: var(--muted); }
 .badge.error { background: rgba(248,81,73,0.15); color: var(--red); }
 .badge.installed { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge.starting, .badge.stopping { background: rgba(234,82,18,0.15); color: var(--accent); }
 
 /* --- Tabs / search / tags --- */
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }

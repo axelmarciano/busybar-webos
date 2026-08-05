@@ -41,9 +41,6 @@ const hidden = {
     id, type: 'rectangle', x: 0, y: OFF_Y, width: 1, height: 1,
     fill: 'none', border_width: 0, timeout: 0,
   }),
-  image: (id: string, path: string): DisplayElement => ({
-    id, type: 'image', path, x: 0, y: OFF_Y, timeout: 0,
-  }),
 };
 
 const PIPE_IDS = ['p0t', 'p0b', 'p1t', 'p1b', 'p2t', 'p2b'];
@@ -81,16 +78,23 @@ export default class FlappyWidget extends Widget {
   private score = 0;
   private best = 0;
   private timer?: NodeJS.Timeout;
-  private drawing = false;
   private diedAt = 0;
+
+  /**
+   * Physics ticks at a fixed rate no matter what; rendering follows with a
+   * single-flight "latest state wins" loop. A slow HTTP frame becomes a
+   * dropped frame instead of frozen game time.
+   */
+  private renderInFlight = false;
+  private renderDirty = false;
 
   async start(): Promise<void> {
     await this.uploadAsset('bird0.png');
     await this.uploadAsset('bird1.png');
     await this.bar.uploadAsset(this.id, 'ding.wav', dingWav());
     await this.bar.uploadAsset(this.id, 'hit.wav', hitWav());
-    await this.showTitle();
-    this.log.info('Ready — press the bar button to flap');
+    this.requestRender();
+    this.log.info('Ready — flip the switch to OFF and press the button');
   }
 
   async stop(): Promise<void> {
@@ -102,11 +106,11 @@ export default class FlappyWidget extends Widget {
     // Mode switch moved: the firmware UI takes over the buttons — pause and
     // guide the player back to OFF, where OK is free for the game.
     if (event.switchEvent?.position) {
-      if (event.switchEvent.position === 'OFF') {
-        if (this.state !== 'playing') void this.showTitle();
-      } else if (this.state === 'playing') {
-        this.pauseForMode();
+      if (event.switchEvent.position !== 'OFF' && this.state === 'playing') {
+        this.state = 'title';
+        if (this.timer) clearInterval(this.timer);
       }
+      this.requestRender();
       return;
     }
 
@@ -121,18 +125,11 @@ export default class FlappyWidget extends Widget {
     }
     // brief lockout so the crash press doesn't instantly restart
     if (this.state === 'dead' && Date.now() - this.diedAt < 700) return;
-    void this.startGame();
-  }
-
-  /** The firmware grabbed the screen (mode switch) — stop ticking, show the hint. */
-  private pauseForMode(): void {
-    this.state = 'title';
-    if (this.timer) clearInterval(this.timer);
-    void this.showTitle();
+    this.startGame();
   }
 
   private gap(): number {
-    return Math.min(Math.max(Number(this.config.gap ?? 8), 6), 11);
+    return Math.min(Math.max(Number(this.config.gap ?? 9), 7), 12);
   }
 
   private priority(): number {
@@ -144,7 +141,7 @@ export default class FlappyWidget extends Widget {
     return { x, gapTop, scored: false };
   }
 
-  private async startGame(): Promise<void> {
+  private startGame(): void {
     this.state = 'playing';
     this.birdY = 6.5;
     this.velocity = 0;
@@ -156,18 +153,20 @@ export default class FlappyWidget extends Widget {
       this.newPipe(W + 10 + i * PIPE_SPACING)
     );
     if (this.timer) clearInterval(this.timer);
-    this.timer = setInterval(() => void this.tick(), TICK_MS);
-    await this.render(); // atomic swap from the title screen, no blank frame
+    this.timer = setInterval(() => this.tick(), TICK_MS);
+    this.requestRender();
   }
 
-  private async tick(): Promise<void> {
-    if (this.state !== 'playing' || this.drawing) return;
+  /** Pure physics — synchronous, never blocked by rendering. */
+  private tick(): void {
+    if (this.state !== 'playing') return;
     this.frame++;
 
     // Waiting for the first flap: the bird bobs in place, nothing moves
     if (!this.armed) {
       this.birdY = 6.5 + Math.sin(this.frame / 4) * 1.2;
-      return this.render();
+      this.requestRender();
+      return;
     }
 
     this.velocity = Math.min(this.velocity + GRAVITY, MAX_FALL);
@@ -198,12 +197,46 @@ export default class FlappyWidget extends Widget {
       }
     }
 
-    await this.render();
+    this.requestRender();
   }
 
-  private async render(): Promise<void> {
-    this.drawing = true;
+  private die(): void {
+    if (this.state !== 'playing') return;
+    this.state = 'dead';
+    this.diedAt = Date.now();
+    if (this.timer) clearInterval(this.timer);
+    this.best = Math.max(this.best, this.score);
+    void this.bar.playAudio(this.id, { path: 'hit.wav' }).catch(() => {});
+    this.requestRender();
+  }
+
+  // --- Rendering pipeline ---
+
+  private requestRender(): void {
+    if (this.renderInFlight) {
+      this.renderDirty = true;
+      return;
+    }
+    void this.renderLoop();
+  }
+
+  private async renderLoop(): Promise<void> {
+    this.renderInFlight = true;
     try {
+      do {
+        this.renderDirty = false;
+        await this.draw(this.frameElements(), { priority: this.priority() });
+      } while (this.renderDirty);
+    } catch (err) {
+      this.log.warn(`draw failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.renderInFlight = false;
+    }
+  }
+
+  /** The full element roster for the current state — one atomic frame. */
+  private frameElements(): DisplayElement[] {
+    if (this.state === 'playing') {
       const gap = this.gap();
       const elements: DisplayElement[] = [];
       this.pipes.forEach((pipe, i) => {
@@ -222,7 +255,8 @@ export default class FlappyWidget extends Widget {
           }
         );
       });
-      elements.push(
+      return [
+        ...elements,
         {
           id: 'bird', type: 'image',
           path: this.flapAnim > 0 ? 'bird1.png' : 'bird0.png',
@@ -235,25 +269,12 @@ export default class FlappyWidget extends Widget {
         hidden.text('name'),
         hidden.text('hint'),
         hidden.text('over'),
-        hidden.text('stats')
-      );
-      await this.draw(elements, { priority: this.priority() });
-    } catch (err) {
-      this.log.warn(`draw failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      this.drawing = false;
+        hidden.text('stats'),
+      ];
     }
-  }
 
-  private die(): void {
-    if (this.state !== 'playing') return;
-    this.state = 'dead';
-    this.diedAt = Date.now();
-    if (this.timer) clearInterval(this.timer);
-    this.best = Math.max(this.best, this.score);
-    void this.bar.playAudio(this.id, { path: 'hit.wav' }).catch(() => {});
-    void this.draw(
-      [
+    if (this.state === 'dead') {
+      return [
         {
           id: 'over', type: 'text', text: 'GAME OVER', font: 'small',
           color: '#F85149FF', align: 'top_mid', x: 36, y: 0, timeout: 0,
@@ -264,35 +285,34 @@ export default class FlappyWidget extends Widget {
           font: 'tiny', color: '#8A93A6FF', align: 'top_mid', x: 36, y: 9, timeout: 0,
         },
         // keep the bird frozen where it crashed, park everything else
+        {
+          id: 'bird', type: 'image', path: 'bird0.png',
+          x: BIRD_X, y: Math.round(this.birdY), timeout: 0,
+        },
         ...PIPE_IDS.map((id) => hidden.rect(id)),
         hidden.text('score'),
         hidden.text('name'),
         hidden.text('hint'),
-      ],
-      { priority: this.priority() }
-    ).catch(() => {});
-  }
+      ];
+    }
 
-  private async showTitle(): Promise<void> {
-    await this.draw(
-      [
-        { id: 'bird', type: 'image', path: 'bird0.png', x: 7, y: 6, timeout: 0 },
-        {
-          id: 'name', type: 'text', text: 'FLAPPY', font: 'small',
-          color: '#FFD000FF', x: 18, y: 0, timeout: 0,
-        },
-        {
-          // switch OFF first: there the firmware leaves OK to the game
-          id: 'hint', type: 'text', text: 'switch OFF + press OK', font: 'tiny',
-          color: '#8A93A6FF', x: 18, y: 9, timeout: 0,
-          width: 53, scroll_rate: 1200, scroll_start_delay: 1200, scroll_repeat_delay: 2000,
-        },
-        ...PIPE_IDS.map((id) => hidden.rect(id)),
-        hidden.text('score'),
-        hidden.text('over'),
-        hidden.text('stats'),
-      ],
-      { priority: this.priority() }
-    );
+    // title
+    return [
+      { id: 'bird', type: 'image', path: 'bird0.png', x: 7, y: 6, timeout: 0 },
+      {
+        id: 'name', type: 'text', text: 'FLAPPY', font: 'small',
+        color: '#FFD000FF', x: 18, y: 0, timeout: 0,
+      },
+      {
+        // switch OFF first: there the firmware leaves OK to the game
+        id: 'hint', type: 'text', text: 'switch OFF + press OK', font: 'tiny',
+        color: '#8A93A6FF', x: 18, y: 9, timeout: 0,
+        width: 53, scroll_rate: 1200, scroll_start_delay: 1200, scroll_repeat_delay: 2000,
+      },
+      ...PIPE_IDS.map((id) => hidden.rect(id)),
+      hidden.text('score'),
+      hidden.text('over'),
+      hidden.text('stats'),
+    ];
   }
 }

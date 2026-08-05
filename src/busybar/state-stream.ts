@@ -83,6 +83,7 @@ class DeviceEventStream {
       console.log('[device-events] connected');
     });
     ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (this.ws !== ws) return; // superseded socket — must not deliver events
       if (!isBinary || !this.handler) return;
       try {
         const state = StateType.toObject(StateType.decode(new Uint8Array(data)), { enums: String }) as {
@@ -108,6 +109,7 @@ class DeviceEventStream {
     });
     ws.on('error', (err) => console.warn(`[device-events] ${err.message}`));
     ws.on('close', () => {
+      if (this.ws !== ws) return; // a newer socket replaced this one — leave it alone
       this.ws = undefined;
       if (this.handler && !this.reconnectTimer) {
         this.reconnectTimer = setTimeout(() => {

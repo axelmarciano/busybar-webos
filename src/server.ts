@@ -26,6 +26,21 @@ import { registry, resolveLaunchSchema } from './core/registry';
 import { runtime } from './core/runtime';
 import { getSettings, updateSettings, type Settings } from './settings';
 
+// Placeholder returned instead of stored `secret` config values; the PUT
+// handler treats it as "leave unchanged" so the round-trip is lossless.
+const SECRET_MASK = '••••••••';
+
+function maskSecrets(
+  config: Record<string, unknown>,
+  schema: import('./core/widget').ConfigSchema
+): Record<string, unknown> {
+  const masked = { ...config };
+  for (const [key, field] of Object.entries(schema)) {
+    if (field.type === 'secret' && masked[key]) masked[key] = SECRET_MASK;
+  }
+  return masked;
+}
+
 export function createServer(): express.Express {
   const app = express();
   app.use(express.json());
@@ -73,7 +88,7 @@ export function createServer(): express.Express {
       configSchema: def.configSchema,
       launchSchema: resolveLaunchSchema(def),
       browser_sources: def.browserSources,
-      config: getStoredConfig(def.id),
+      config: maskSecrets(getStoredConfig(def.id), def.configSchema),
       has_preview: previewFile(def.id) !== null,
       ...runtime.statusOf(def.id),
     });
@@ -111,9 +126,9 @@ export function createServer(): express.Express {
       res.status(404).json({ error: 'Unknown widget' });
       return;
     }
-    if (runtime.isRunning(req.params.id)) {
-      await runtime.stop(req.params.id).catch(() => {});
-    }
+    // Unconditional stop: it queues behind any in-flight start, so an
+    // uninstall can't slip through while the widget is still coming up
+    await runtime.stop(req.params.id).catch(() => {});
     uninstallWidget(req.params.id);
     clearWidgetConfig(req.params.id);
     res.json({ result: 'OK' });
@@ -155,8 +170,14 @@ export function createServer(): express.Express {
       res.status(404).json({ error: 'Unknown widget' });
       return;
     }
+    // Masked secrets coming back from the portal mean "unchanged" — drop them
+    // so setWidgetConfig keeps the stored value
+    const values = { ...((req.body ?? {}) as Record<string, unknown>) };
+    for (const [key, field] of Object.entries(def.configSchema)) {
+      if (field.type === 'secret' && values[key] === SECRET_MASK) delete values[key];
+    }
     try {
-      setWidgetConfig(def.id, def.configSchema, req.body ?? {}, (finalConfig) =>
+      setWidgetConfig(def.id, def.configSchema, values, (finalConfig) =>
         def.ctor.validateConfig?.(finalConfig)
       );
     } catch (err) {

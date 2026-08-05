@@ -107,6 +107,9 @@ export abstract class Widget {
   protected readonly log: WidgetLogger;
 
   private timers = new Set<NodeJS.Timeout>();
+  /** Set on stop: silences in-flight every() callbacks so a late completion
+      can't redraw on the device or paint an error after cleanup. */
+  private disposed = false;
 
   constructor(ctx: WidgetContext) {
     this.id = ctx.id;
@@ -144,9 +147,11 @@ export abstract class Widget {
    */
   protected every(ms: number, fn: () => void | Promise<void>): void {
     const run = async () => {
+      if (this.disposed) return;
       try {
         await fn();
       } catch (err) {
+        if (this.disposed) return; // widget stopped mid-callback — not a real failure
         const message = err instanceof Error ? err.message : String(err);
         this.log.error(message);
         void showErrorOnDevice(this.id, message);
@@ -162,6 +167,7 @@ export abstract class Widget {
     elements: DisplayElement[],
     opts: { priority?: number; led?: string } = {}
   ): Promise<void> {
+    if (this.disposed) return; // late completion after stop — the display was already cleared
     await this.bar.draw({
       application_name: this.id,
       priority: opts.priority,
@@ -172,6 +178,7 @@ export abstract class Widget {
 
   /** Clears the elements drawn by this widget. */
   protected async clear(): Promise<void> {
+    if (this.disposed) return;
     await this.bar.clearDisplay(this.id);
   }
 
@@ -181,8 +188,9 @@ export abstract class Widget {
     await this.bar.uploadAsset(this.id, filename, data);
   }
 
-  /** Runtime internal: clears timers. */
+  /** Runtime internal: clears timers and silences in-flight callbacks. */
   _dispose(): void {
+    this.disposed = true;
     for (const timer of this.timers) clearInterval(timer);
     this.timers.clear();
   }

@@ -26,4 +26,10 @@ export function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
-export const STATE_LABELS = { running: 'Running', stopped: 'Stopped', error: 'Error' };
+export const STATE_LABELS = {
+  starting: 'Starting…',
+  running: 'Running',
+  stopping: 'Stopping…',
+  stopped: 'Stopped',
+  error: 'Error',
+};
