@@ -15,19 +15,23 @@ const FRAME_BYTES = W * H * 3;
 
 const YOUTUBE_URL = /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i;
 
+/** Device audio truth: WAV only, and the player runs everything at 44100 Hz mono. */
+const AUDIO_RATE = 44_100;
+/** WAV is ~5.3MB/min at 44.1kHz — cap so the upload stays reliable. */
+const AUDIO_MAX_SECONDS = 90;
+
 /**
- * The audio lives under its own application name: video frames are uploaded
- * to the widget's assets every ~100ms, and writing into the directory of a
- * file being played can interrupt the playback.
+ * The audio lives under its own application name — writing into the assets
+ * directory of a file being played can interrupt the playback.
  */
 const AUDIO_APP = 'youtube.audio';
 
-type ScreenState = 'loading' | 'playing' | 'done' | 'error';
+type ScreenState = 'loading' | 'done' | 'error';
 
 export default class YoutubeWidget extends Widget {
   static title = 'YouTube';
   static description =
-    'Streams a YouTube (or direct mp4/m3u8) video URL as 72x16 pixels. Needs ffmpeg; yt-dlp for YouTube links.';
+    'Streams a YouTube (or direct mp4/m3u8) video URL as 72x16 pixels, with sound. Needs ffmpeg; yt-dlp for YouTube links.';
   static tags = ['fun', 'video'];
   static author = 'axelmarciano';
   static configSchema = {
@@ -63,11 +67,11 @@ export default class YoutubeWidget extends Widget {
     },
     sound: {
       type: 'select' as const,
-      label: 'Sound (extracted and played on the bar)',
-      default: 'on',
+      label: 'Sound (loaded before playback, first 90s of audio)',
+      default: 'off',
       options: [
-        { value: 'on', label: 'On' },
-        { value: 'off', label: 'Off' },
+        { value: 'off', label: 'Off — video starts instantly' },
+        { value: 'on', label: 'On — adds a loading step before playback' },
       ],
     },
   };
@@ -88,41 +92,36 @@ export default class YoutubeWidget extends Widget {
   }
 
   private abort = new AbortController();
+  private stopped = false;
   private latestFrame: Buffer | null = null;
   private frameFlip = 0;
   private lastFile: string | null = null;
   private renderInFlight = false;
-  private stopped = false;
-  /**
-   * Audio joins the already-running video: extracted in the background while
-   * frames stream, then scheduled at a sync point (loop boundary in loop mode,
-   * the -ss offset position in stop mode). Video never waits for it.
-   */
-  private audioReady = false;
-  private audioScheduled = false;
+  private tempFiles: string[] = [];
+
+  /** Combined 240p file downloaded for audio — reused by the video 403 fallback. */
+  private localCopy: string | null = null;
+  /** Unique per run: the device caches assets by path — a reused name can play stale audio. */
+  private audioPath = `audio-${Date.now()}.wav`;
+  private hasAudio = false;
   private audioStarted = false;
-  private audioSeconds = 0;
-  private audioOffset = 0;
-  private firstFrameAt = 0;
-  private audioJoinTimer?: NodeJS.Timeout;
+  /** Full source duration (s) — the loop replay cadence. */
+  private videoDuration = 0;
   private audioLoopTimer?: NodeJS.Timeout;
-  private loopAudio = false;
-  private firstFrameResolve?: () => void;
-  private firstFramePromise = new Promise<void>((resolve) => {
-    this.firstFrameResolve = resolve;
-  });
+  private loop = false;
 
   async start(): Promise<void> {
     const url = String(this.launch.url ?? '').trim();
     const fps = Math.min(Math.max(Number(this.launch.fps ?? 8), 2), 12);
-    const loop = String(this.launch.loop ?? 'loop') === 'loop';
+    this.loop = String(this.launch.loop ?? 'loop') === 'loop';
 
     await this.showStatus('loading');
     // Reclaim device storage from previous runs (old frames + audio track)
     await this.bar.deleteAssets(this.id).catch(() => {});
     await this.bar.deleteAssets(AUDIO_APP).catch(() => {});
-    // Resolution + streaming continue in the background so start() returns fast
-    void this.pipeline(url, fps, loop).catch((err) => {
+    // Everything else continues in the background so start() returns fast
+    void this.pipeline(url, fps).catch((err) => {
+      if (this.stopped) return;
       const message = err instanceof Error ? err.message : String(err);
       this.log.error(message);
       void this.showStatus('error', message.slice(0, 40));
@@ -132,32 +131,81 @@ export default class YoutubeWidget extends Widget {
   async stop(): Promise<void> {
     this.stopped = true;
     this.abort.abort();
-    if (this.audioJoinTimer) clearTimeout(this.audioJoinTimer);
     if (this.audioLoopTimer) clearInterval(this.audioLoopTimer);
     if (this.audioStarted) await this.bar.stopAudio().catch(() => {});
+    for (const file of this.tempFiles) fs.rm(file, () => {});
   }
 
-  // --- Pipeline ---
+  // --- Pipeline: [resolve] → [load sound] → video + sound start TOGETHER ---
+  //
+  // The sound is fully loaded before playback begins: a clean "loading sound"
+  // screen for a few seconds, then video and audio start in sync at 0:00.
+  // (Joining audio mid-play was tried and hurt: the big WAV upload competes
+  // with the frame uploads on the device's tiny HTTP server and freezes the
+  // video for its whole duration.)
 
-  private async pipeline(url: string, fps: number, loop: boolean): Promise<void> {
-    const streamUrl = await this.resolveStreamUrl(url);
-    if (this.stopped) return;
-    this.loopAudio = loop;
-
-    // Audio is prepared in the BACKGROUND — the video starts streaming
-    // immediately and the sound joins it at a sync point once ready.
-    if (String(this.launch.sound ?? 'on') === 'on') {
-      // Sound joins the running video 10s in (extraction happens during those
-      // 10 seconds); in loop mode it replays at boundary+10s on every pass.
-      this.audioOffset = 10;
-      void this.prepareAudio(url, streamUrl);
+  private async pipeline(url: string, fps: number): Promise<void> {
+    const isYoutube = YOUTUBE_URL.test(url);
+    let source = url;
+    if (isYoutube) {
+      source = await this.resolveStreamUrl(url);
     }
-    this.log.info(`Streaming at ${fps} fps${loop ? ' (loop)' : ''}`);
+    if (this.stopped) return;
 
-    await new Promise<void>((resolve, reject) => {
+    if (String(this.launch.sound ?? 'off') === 'on') {
+      await this.showStatus('loading', 'loading sound...');
+      try {
+        // Resolved YouTube stream URLs are throttled to realtime by Google,
+        // and audio-only DASH formats 403 on PO-token-gated videos — so yt-dlp
+        // downloads the combined 240p file (the one format that always works).
+        const audioSource = isYoutube ? await this.downloadYoutubeVideo(url) : source;
+        if (isYoutube) this.localCopy = audioSource;
+        if (this.stopped) return;
+        const audio = await this.extractAudio(audioSource);
+        if (this.stopped) return;
+        await this.bar.uploadAsset(AUDIO_APP, this.audioPath, audio.wav);
+        this.videoDuration = await this.probeDuration(audioSource).catch(() => audio.seconds);
+        this.hasAudio = true;
+        this.log.info(
+          `Sound loaded (${Math.round(audio.seconds)}s${
+            audio.seconds < this.videoDuration ? ` of ${Math.round(this.videoDuration)}s` : ''
+          })`
+        );
+      } catch (err) {
+        if (this.stopped) return;
+        this.log.warn(
+          `No sound: ${err instanceof Error ? err.message : String(err)} — playing video only`
+        );
+      }
+    }
+    if (this.stopped) return;
+
+    this.log.info(`Streaming at ${fps} fps${this.loop ? ' (loop)' : ''}`);
+    try {
+      // The combined file downloaded for the audio doubles as the video
+      // source: local, loop-safe, and immune to Google's URL restrictions.
+      await this.streamVideo(this.localCopy ?? source, fps);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isYoutube || !/403|Forbidden/i.test(message) || this.stopped) throw err;
+      // Google refused the resolved URL — download the file and stream that
+      this.log.warn('Stream URL refused (403) — streaming the downloaded file instead');
+      let local = this.localCopy;
+      if (!local) {
+        await this.showStatus('loading', 'downloading video...');
+        local = await this.downloadYoutubeVideo(url);
+        this.log.info('Video downloaded');
+      }
+      if (this.stopped) return;
+      await this.streamVideo(local, fps);
+    }
+  }
+
+  private streamVideo(streamUrl: string, fps: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const args = [
         '-hide_banner', '-loglevel', 'error',
-        ...(loop ? ['-stream_loop', '-1'] : []),
+        ...(this.loop ? ['-stream_loop', '-1'] : []),
         '-re',
         '-i', streamUrl,
         '-vf', `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`,
@@ -205,26 +253,38 @@ export default class YoutubeWidget extends Widget {
     });
   }
 
-  /**
-   * Extracts the audio track as mono 22kHz WAV (capped at 10 min).
-   * The RIFF sizes are patched afterwards — ffmpeg writes placeholder sizes
-   * when piping, which the device's player would reject.
-   */
-  private extractAudio(streamUrl: string, offsetSeconds = 0): Promise<{ wav: Buffer; seconds: number }> {
-    // WAV is bulky (~2.6MB/min): cap at 2 min so the upload stays fast
-    const MAX_SECONDS = 120;
-    const TIMEOUT_MS = 60_000; // live streams / slow sources: give up, video-only
+  // --- Sound (starts with the first drawn frame) ---
+
+  private startAudio(): void {
+    if (!this.hasAudio || this.audioStarted) return;
+    this.audioStarted = true;
+    const play = () =>
+      void this.bar.playAudio(AUDIO_APP, { path: this.audioPath }).catch((err) => {
+        this.log.warn(`audio play failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    play();
+    // Loop mode: replay the track at every video loop boundary
+    if (this.loop && this.videoDuration > 1) {
+      this.audioLoopTimer = setInterval(play, this.videoDuration * 1000);
+    }
+  }
+
+  /** Uploads the track under this run's unique filename. */
+  private async uploadAudioTrack(wav: Buffer): Promise<void> {
+    await this.bar.uploadAsset(AUDIO_APP, this.audioPath, wav);
+  }
+
+  /** Extracts up to AUDIO_MAX_SECONDS of audio as device-rate WAV (RIFF sizes patched). */
+  private extractAudio(source: string): Promise<{ wav: Buffer; seconds: number }> {
     return new Promise((resolve, reject) => {
-      const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
-      const signal = AbortSignal.any([timeoutSignal, this.abort.signal]);
+      const signal = AbortSignal.any([AbortSignal.timeout(60_000), this.abort.signal]);
       const child = spawn(
         'ffmpeg',
         [
           '-hide_banner', '-loglevel', 'error',
-          ...(offsetSeconds > 0 ? ['-ss', String(offsetSeconds)] : []),
-          '-t', String(MAX_SECONDS),
-          '-i', streamUrl,
-          '-vn', '-ac', '1', '-ar', '22050',
+          '-t', String(AUDIO_MAX_SECONDS),
+          '-i', source,
+          '-vn', '-ac', '1', '-ar', String(AUDIO_RATE),
           '-f', 'wav', 'pipe:1',
         ],
         { stdio: ['ignore', 'pipe', 'pipe'], signal }
@@ -244,129 +304,31 @@ export default class YoutubeWidget extends Widget {
         const wav = Buffer.concat(chunks);
         if (wav.length <= 44) return reject(new Error('no audio track'));
         const dataLength = wav.length - 44;
-        wav.writeUInt32LE(36 + dataLength, 4); // RIFF size
+        wav.writeUInt32LE(36 + dataLength, 4); // RIFF size (ffmpeg writes placeholders when piping)
         wav.writeUInt32LE(dataLength, 40); // data size
-        resolve({ wav, seconds: dataLength / (22_050 * 2) });
+        resolve({ wav, seconds: dataLength / (AUDIO_RATE * 2) });
       });
     });
   }
 
-  /**
-   * Background: extract + upload, then schedule the join with the video.
-   * YouTube: the resolved googlevideo stream is throttled to realtime by
-   * Google — extracting from it would take the video's full duration. yt-dlp
-   * downloads the (small) audio-only track at full speed instead, and ffmpeg
-   * converts the local file instantly.
-   */
-  private async prepareAudio(originalUrl: string, streamUrl: string): Promise<void> {
-    let tempFile: string | null = null;
-    try {
-      let source = streamUrl;
-      if (YOUTUBE_URL.test(originalUrl)) {
-        tempFile = await this.downloadYoutubeAudio(originalUrl);
-        source = tempFile;
-      }
-      if (this.stopped) return;
-      await this.firstFramePromise;
-
-      // The device can't seek inside a WAV, so the file must START at a video
-      // position we can still reach once extraction+upload are done. The cost
-      // isn't known upfront (upload speed varies) — measure it and re-aim:
-      // attempt 2 uses attempt 1's real cost, so this converges immediately.
-      let margin = 8;
-      for (let attempt = 1; attempt <= 3 && !this.stopped; attempt++) {
-        const elapsed = () => (Date.now() - this.firstFrameAt) / 1000;
-        const target = Math.max(this.audioOffset, Math.ceil(elapsed()) + margin);
-        const begun = Date.now();
-        const audio = await this.extractAudio(source, target);
-        if (this.stopped) return;
-        await this.bar.uploadAsset(AUDIO_APP, 'audio.wav', audio.wav);
-        const cost = (Date.now() - begun) / 1000;
-        if (elapsed() < target - 0.3) {
-          this.audioOffset = target;
-          this.audioSeconds = audio.seconds;
-          this.audioReady = true;
-          this.log.info(`Audio ready (${Math.round(audio.seconds)}s from position ${target}s)`);
-          this.scheduleAudio();
-          return;
-        }
-        margin = Math.ceil(cost * 1.4) + 3;
-        this.log.info(`Audio missed its slot (took ${Math.round(cost)}s) — re-aiming ${margin}s ahead`);
-      }
-      this.log.warn('Audio could not catch up with the video — playing video only');
-    } catch (err) {
-      if (this.stopped) return;
-      this.log.warn(
-        `No audio: ${err instanceof Error ? err.message : String(err)} — playing video only`
-      );
-    } finally {
-      if (tempFile) fs.rm(tempFile, () => {});
-    }
-  }
-
-  /** Downloads the audio-only track to a temp file (fast — yt-dlp dodges the throttling). */
-  private async downloadYoutubeAudio(url: string): Promise<string> {
-    const base = path.join(os.tmpdir(), `busybar-yt-${process.pid}-${Date.now()}`);
-    await run(
-      'yt-dlp',
-      ['-f', 'worstaudio/worst', '--no-playlist', '-o', `${base}.%(ext)s`, url],
-      { timeout: 90_000, signal: this.abort.signal }
+  /** Full duration of a source in seconds (loop replay cadence). */
+  private async probeDuration(source: string): Promise<number> {
+    const { stdout } = await run(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', source],
+      { timeout: 15_000, signal: this.abort.signal }
     );
-    const dir = os.tmpdir();
-    const name = fs.readdirSync(dir).find((f) => f.startsWith(path.basename(base)));
-    if (!name) throw new Error('yt-dlp produced no audio file');
-    return path.join(dir, name);
+    const seconds = parseFloat(stdout.trim());
+    if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('unknown duration');
+    return seconds;
   }
 
-  /**
-   * Syncs the audio with the running video. Called when audio becomes ready
-   * and when the first frame is drawn — fires once both have happened.
-   * Loop mode: start exactly on the next loop boundary, then every loop.
-   * Stop mode: start when the video reaches the extraction offset.
-   */
-  private scheduleAudio(): void {
-    if (!this.audioReady || !this.firstFrameAt || this.audioScheduled || this.stopped) return;
-    this.audioScheduled = true;
-    const play = () => {
-      this.audioStarted = true;
-      this.log.info('Playing audio track');
-      void this.bar.playAudio(AUDIO_APP, { path: 'audio.wav' }).catch((err) => {
-        this.log.error(`Audio play failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    };
-    const elapsed = (Date.now() - this.firstFrameAt) / 1000;
-    // full video duration = skipped head + extracted tail
-    const duration = this.audioOffset + this.audioSeconds;
+  // --- yt-dlp helpers (the only fetcher Google reliably allows) ---
 
-    // First join: at video position `audioOffset` of the current pass.
-    // If extraction outlived that point (or the whole pass), aim for the
-    // same position in the next pass (loop mode only).
-    let startIn = this.audioOffset - elapsed;
-    if (startIn < 0.15 && this.loopAudio && duration > 1) {
-      const pass = Math.ceil((elapsed - this.audioOffset) / duration);
-      startIn = pass * duration + this.audioOffset - elapsed;
-    }
-    if (startIn < 0.15) {
-      this.log.warn('Audio was ready too late to sync — playing video only');
-      return;
-    }
-    this.log.info(`Sound joins in ${Math.round(startIn)}s`);
-    this.audioJoinTimer = setTimeout(() => {
-      play();
-      if (this.loopAudio && duration > 1) {
-        this.audioLoopTimer = setInterval(play, duration * 1000);
-      }
-    }, startIn * 1000);
-  }
-
-  /** YouTube links go through yt-dlp; anything else is handed to ffmpeg as-is. */
   private async resolveStreamUrl(url: string): Promise<string> {
-    if (!YOUTUBE_URL.test(url)) return url;
-    this.log.info('Resolving YouTube stream via yt-dlp…');
     try {
       const { stdout } = await run(
         'yt-dlp',
-        // combined video+audio stream: DASH video-only formats would leave the bar silent
         ['-g', '-f', 'best[height<=240][acodec!=none]/best[acodec!=none]/worst', '--no-playlist', url],
         { timeout: 30_000, signal: this.abort.signal }
       );
@@ -382,6 +344,25 @@ export default class YoutubeWidget extends Widget {
       }
       throw err;
     }
+  }
+
+  private downloadYoutubeVideo(url: string): Promise<string> {
+    return this.download(url, 'best[height<=240][acodec!=none]/best[acodec!=none]/worst', 180_000);
+  }
+
+  private async download(url: string, format: string, timeout: number): Promise<string> {
+    const base = path.join(os.tmpdir(), `busybar-yt-${process.pid}-${Date.now()}`);
+    await run(
+      'yt-dlp',
+      ['-f', format, '--no-playlist', '-o', `${base}.%(ext)s`, url],
+      { timeout, signal: this.abort.signal }
+    );
+    const dir = os.tmpdir();
+    const name = fs.readdirSync(dir).find((f) => f.startsWith(path.basename(base)));
+    if (!name) throw new Error('yt-dlp produced no file');
+    const file = path.join(dir, name);
+    this.tempFiles.push(file);
+    return file;
   }
 
   // --- Rendering (single-flight, latest frame wins) ---
@@ -412,17 +393,12 @@ export default class YoutubeWidget extends Widget {
           ],
           { priority: this.priority() }
         );
-        if (!this.firstFrameAt) {
-          this.firstFrameAt = Date.now(); // video clock zero — audio syncs to this
-          this.firstFrameResolve?.();
-          this.scheduleAudio();
-        }
+        this.startAudio(); // first frame on screen = audio starts, in sync at 0:00
       }
     } catch (err) {
       this.log.warn(`frame failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.renderInFlight = false;
-      // a frame may have landed while we were finishing — pick it up
       if (!this.stopped && this.latestFrame) this.requestRender();
     }
   }
@@ -443,7 +419,6 @@ export default class YoutubeWidget extends Widget {
   private async showStatus(state: ScreenState, detail?: string): Promise<void> {
     const lines: Record<ScreenState, [string, string]> = {
       loading: ['YOUTUBE', detail ?? 'loading...'],
-      playing: ['', ''],
       done: ['DONE', 'video finished'],
       error: ['ERROR', detail ?? 'see widget logs'],
     };

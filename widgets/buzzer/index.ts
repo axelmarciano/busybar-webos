@@ -1,5 +1,6 @@
 import { Widget } from '../../src/core/widget';
 import type { DeviceInputEvent } from '../../src/busybar/state-stream';
+import { uploadSound } from '../_shared/wav';
 import { buzzerWav } from './sound';
 
 export default class BuzzerWidget extends Widget {
@@ -19,9 +20,13 @@ export default class BuzzerWidget extends Widget {
 
   private stopped = false;
   private idleTimer?: NodeJS.Timeout;
+  private soundPath = '';
+  /** One stop+play sequence in flight at a time; extra presses collapse into one restart. */
+  private buzzing = false;
+  private buzzAgain = false;
 
   async start(): Promise<void> {
-    await this.bar.uploadAsset(this.id, 'buzz.wav', buzzerWav());
+    this.soundPath = await uploadSound(this.bar, this.id, 'buzz', buzzerWav());
     const volume = Math.min(Math.max(Number(this.config.volume ?? 80), 0), 100);
     await this.bar.setVolume(volume).catch((err) => {
       this.log.warn(`Could not set volume: ${err instanceof Error ? err.message : String(err)}`);
@@ -75,9 +80,7 @@ export default class BuzzerWidget extends Widget {
   private async buzz(): Promise<void> {
     this.log.info('BUZZ!');
     // Sound first — latency matters more than pixels on a buzzer
-    this.bar.playAudio(this.id, { path: 'buzz.wav' }).catch((err) => {
-      this.log.debug(`audio: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    void this.triggerSound();
     try {
       await this.draw(
         [
@@ -113,6 +116,29 @@ export default class BuzzerWidget extends Widget {
     this.idleTimer = setTimeout(() => {
       if (!this.stopped) void this.drawIdle().catch(() => {});
     }, 1_600);
+  }
+
+  /**
+   * Restarts the buzz from the top on every press, spam-friendly. The
+   * firmware silences the sound when playAudio hits a file already playing,
+   * so each trigger is an explicit stop + play; sequences are serialized
+   * (with rapid presses collapsed into one pending restart) so a stop can
+   * never race after the play it belongs to.
+   */
+  private async triggerSound(): Promise<void> {
+    if (this.buzzing) {
+      this.buzzAgain = true;
+      return;
+    }
+    this.buzzing = true;
+    do {
+      this.buzzAgain = false;
+      await this.bar.stopAudio().catch(() => {});
+      await this.bar.playAudio(this.id, { path: this.soundPath }).catch((err) => {
+        this.log.debug(`audio: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } while (this.buzzAgain && !this.stopped);
+    this.buzzing = false;
   }
 
   private priority(): number {

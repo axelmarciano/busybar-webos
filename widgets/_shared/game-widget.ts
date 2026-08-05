@@ -1,6 +1,7 @@
 import { Widget } from '../../src/core/widget';
 import type { DisplayElement } from '../../src/busybar/client';
 import type { DeviceInputEvent } from '../../src/busybar/state-stream';
+import { uploadSound } from './wav';
 
 export const SCREEN_W = 72;
 export const SCREEN_H = 16;
@@ -73,6 +74,8 @@ export abstract class GameWidget extends Widget {
   protected best = 0;
 
   private timer?: NodeJS.Timeout;
+  /** Device path per sound name, resolved by uploadSound at start. */
+  private soundPaths: Record<string, string> = {};
   private overAt = 0;
   private renderInFlight = false;
   private renderDirty = false;
@@ -82,7 +85,7 @@ export abstract class GameWidget extends Widget {
       await this.uploadAsset(file);
     }
     for (const [name, make] of Object.entries(this.sounds)) {
-      await this.bar.uploadAsset(this.id, `${name}.wav`, make());
+      this.soundPaths[name] = await uploadSound(this.bar, this.id, name, make());
     }
     this.requestRender();
     this.log.info('Ready — flip the switch to OFF and press the button');
@@ -145,7 +148,8 @@ export abstract class GameWidget extends Widget {
 
   /** Fire-and-forget playback of a sound declared in `sounds`. */
   protected playSound(name: string): void {
-    void this.bar.playAudio(this.id, { path: `${name}.wav` }).catch(() => {});
+    const path = this.soundPaths[name];
+    if (path) void this.bar.playAudio(this.id, { path }).catch(() => {});
   }
 
   protected priority(): number {

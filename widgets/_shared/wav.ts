@@ -4,7 +4,7 @@
  * into a mono 16-bit WAV buffer ready for uploadAsset + playAudio.
  */
 
-export const RATE = 22_050;
+export const RATE = 44_100;
 
 /** Wraps raw 16-bit mono PCM samples in a WAV container. */
 export function wav(data: Buffer): Buffer {
@@ -39,3 +39,29 @@ export function render(seconds: number, sample: (t: number) => number): Buffer {
 export const sine = (freq: number, t: number): number => Math.sin(2 * Math.PI * freq * t);
 
 export const square = (freq: number, t: number): number => (sine(freq, t) > 0 ? 1 : -1);
+
+/**
+ * Uploads a sound under a content-hashed filename and returns the path to
+ * play. The firmware keeps an open handle on the last-played audio file
+ * (surviving playback end and even DELETE /assets) which makes re-uploading
+ * that name fail with "Failed to open file for writing". Hashing the name by
+ * content sidesteps it: an upload refused on an existing name means the very
+ * same bytes are already on the device — safe to just play them; changed
+ * sound code changes the name and never collides with the locked file.
+ */
+export async function uploadSound(
+  bar: { uploadAsset(app: string, file: string, data: Buffer): Promise<void> },
+  appId: string,
+  label: string,
+  data: Buffer
+): Promise<string> {
+  const { createHash } = await import('node:crypto');
+  const name = `${label}-${createHash('sha1').update(data).digest('hex').slice(0, 8)}.wav`;
+  try {
+    await bar.uploadAsset(appId, name, data);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('Failed to open file for writing')) throw err;
+  }
+  return name;
+}

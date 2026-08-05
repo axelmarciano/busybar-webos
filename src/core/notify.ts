@@ -52,7 +52,7 @@ const uploadedIcons = new Set<string>();
  * assets, and "shared/" stock paths return OK without producing sound.
  */
 function chimeWav(): Buffer {
-  const RATE = 22_050;
+  const RATE = 44_100;
   const SECONDS = 0.42;
   const samples = Math.floor(RATE * SECONDS);
   const data = Buffer.alloc(samples * 2);
