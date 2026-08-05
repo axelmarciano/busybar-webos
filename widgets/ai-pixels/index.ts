@@ -55,12 +55,12 @@ export default class AiPixelsWidget extends Widget {
     apiKey: { type: 'secret' as const, label: 'API key (anthropic / openai providers only)' },
     effort: {
       type: 'select' as const,
-      label: 'Reasoning effort — low is fast, higher thinks longer for fancier animations',
-      default: 'low',
+      label: 'Reasoning effort — higher thinks longer for finer art',
+      default: 'medium',
       options: [
-        { value: 'low', label: 'Low — fastest (recommended)' },
-        { value: 'medium', label: 'Medium' },
-        { value: 'high', label: 'High — slow, fancier' },
+        { value: 'low', label: 'Low — fastest, rough' },
+        { value: 'medium', label: 'Medium — best balance (recommended)' },
+        { value: 'high', label: 'High — finest, slower' },
       ],
     },
     model: {
@@ -182,7 +182,7 @@ export default class AiPixelsWidget extends Widget {
         provider,
         apiKey: this.config.apiKey ? String(this.config.apiKey) : undefined,
         model,
-        effort: String(this.config.effort || 'low'),
+        effort: String(this.config.effort || 'medium'),
         prompt,
         durationSeconds,
         onProgress: (line) => { this.status = line; },
