@@ -60,6 +60,9 @@ PUT flame 55 9
 PUT flame 65 10
 (a frame is JUST a list of "PUT <sprite> <x> <y>" — top-left coordinates on the ${SCREEN_W}×${SCREEN_H} canvas. Tile one sprite many times to cover the width — like this fireplace. Animate by shifting x/y a few pixels or swapping sprite variants between frames.)
 
+TEXT 20 6 W REACT
+(renders crisp built-in 3×5 pixel text at x,y using palette color W — each character is 4 px wide including spacing. NEVER draw letters, digits or logos' wordmarks inside sprites: hand-drawn letters come out garbled. Any word on screen MUST use TEXT.)
+
 Helpers — never write the same thing twice:
 HOLD 400        (repeats the previous frame for 400 ms)
 LOOP 4 … END    (plays the enclosed frames 4 times — flicker, rain, waves, cycles)
