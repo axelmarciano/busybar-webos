@@ -2,6 +2,8 @@
 
 A TypeScript "OS" for the [BUSY Bar](https://busy.bar) device: a widget runtime + web portal backed by SQLite.
 
+![BUSY Web OS portal — widgets rendered inside the real device frame, with live screen preview](docs/portal.png)
+
 - **Widgets** live in `widgets/<id>/` as simple classes (`class WeatherWidget extends Widget`), can bundle images, and draw on the device displays.
 - **Portal** (default `http://localhost:3000`): start/stop widgets, edit per-widget config, view per-widget logs, live screen preview.
 - **Global settings**: device access over USB ethernet (`http://10.0.4.20`), Wi-Fi LAN (optional access key sent as `X-API-Token`), or the BUSY cloud (`https://api.busy.app`, Bearer token from [cloud.busy.app/api-tokens](https://cloud.busy.app/api-tokens)). First run shows an onboarding page until a connection is saved; the bar's Wi-Fi HTTP access (`/access`) is manageable from the portal.
