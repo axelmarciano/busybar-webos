@@ -83,7 +83,13 @@ Mark fields `required: true` to block start until they're set. Values are valida
 
 ### Preview image
 
-Widget cards in the portal show a preview of the widget's rendering if the widget ships one: put a `preview.png` next to the widget's `index.ts` (`widgets/<id>/preview.png`). Ideal ratio is 72:16 like the front display. No file, no preview.
+Widget cards in the portal show a preview of the widget's rendering if the widget ships one. Accepted locations (first match wins, extensions png/bmp/jpg/webp):
+
+- `widgets/<id>/preview.<ext>`
+- `widgets/<id>/assets/preview.<ext>`
+- `widgets/<id>/assets/<id>.<ext>` (e.g. `weather/assets/weather.bmp`)
+
+Ideal ratio is 72:16 like the front display. No file, no preview.
 
 The front display is 72×16 px; keep drawings small. See the device OpenAPI spec for all element types (text, image, animation, countdown, rectangle).
 
