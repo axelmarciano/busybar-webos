@@ -2,7 +2,7 @@ import { bar } from '../busybar/client';
 import { coerceLaunchValues, getEffectiveConfig, missingRequiredKeys } from './config';
 import { clearErrorNotice, resetErrorThrottle, showErrorOnDevice } from './device-error';
 import { WidgetLogger } from './logger';
-import { registry } from './registry';
+import { registry, resolveLaunchSchema } from './registry';
 import type { Widget } from './widget';
 
 export type WidgetState = 'running' | 'stopped' | 'error';
@@ -27,7 +27,7 @@ class Runtime {
     if (this.instances.has(id)) throw new Error(`Widget "${id}" is already running`);
 
     // Validated before anything is stopped, so a bad launch value is a no-op
-    const launchValues = coerceLaunchValues(def.launchSchema, launch);
+    const launchValues = coerceLaunchValues(resolveLaunchSchema(def), launch);
 
     // Exclusive mode: only one widget runs at a time — starting a new one stops the others
     for (const runningId of [...this.instances.keys()]) {

@@ -68,3 +68,12 @@ class Registry {
 }
 
 export const registry = new Registry();
+
+/** Launch schema for right now — dynamic if the widget provides one. */
+export function resolveLaunchSchema(def: WidgetDefinition): ConfigSchema {
+  try {
+    return def.ctor.dynamicLaunchSchema?.() ?? def.launchSchema;
+  } catch {
+    return def.launchSchema;
+  }
+}

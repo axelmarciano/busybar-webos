@@ -4,11 +4,17 @@ import { BusyBarError } from '../../src/busybar/client';
 import { generateMovie } from './llm';
 import { movieDurationMs, parseMovie, SCREEN_H, SCREEN_W } from './movie';
 import { encodePng } from './png';
+import { getMovie, listMovies, saveMovie } from './store';
 
 interface PlaylistEntry {
   asset: string;
   durationMs: number;
 }
+
+type ProduceJob =
+  | { kind: 'new'; prompt: string }
+  | { kind: 'refine'; prompt: string; base: { prompt: string; movie: string } }
+  | { kind: 'replay'; base: { prompt: string; movie: string } };
 
 const SPINNER_FRAMES = 8;
 const SPINNER_SIZE = 16;
@@ -104,6 +110,35 @@ export default class AiPixelsWidget extends Widget {
     },
   };
 
+  /** Once creations are saved, the Start modal also offers replay/refine */
+  static dynamicLaunchSchema = () => {
+    const saved = listMovies();
+    if (saved.length === 0) return AiPixelsWidget.launchSchema;
+    return {
+      source: {
+        type: 'select' as const,
+        label: 'Start from',
+        default: 'new',
+        options: [
+          { value: 'new', label: 'New creation' },
+          ...saved.map((m) => ({
+            value: `saved:${m.id}`,
+            label: `${m.prompt.slice(0, 48)} — ${new Date(m.created_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`,
+          })),
+        ],
+      },
+      prompt: {
+        type: 'string' as const,
+        label: 'Prompt — new creation, or a change to apply to the saved one (empty = just replay it)',
+      },
+      durationSeconds: {
+        type: 'number' as const,
+        label: 'Movie length in seconds (then it loops)',
+        default: 15,
+      },
+    };
+  };
+
   private stopped = false;
   private playing = false;
   private playTimer?: NodeJS.Timeout;
@@ -116,8 +151,20 @@ export default class AiPixelsWidget extends Widget {
 
   async start(): Promise<void> {
     const prompt = String(this.launch.prompt ?? '').trim();
-    if (!prompt) throw new Error('A prompt is required');
+    const source = String(this.launch.source ?? 'new');
     const duration = Math.min(Math.max(Number(this.launch.durationSeconds) || 15, 5), 60);
+
+    let job: ProduceJob;
+    if (source.startsWith('saved:')) {
+      const saved = getMovie(Number(source.slice('saved:'.length)));
+      if (!saved) throw new Error('Saved creation not found');
+      job = prompt
+        ? { kind: 'refine', prompt, base: saved } // saved movie + change request
+        : { kind: 'replay', base: saved }; // instant, no AI call
+    } else {
+      if (!prompt) throw new Error('A prompt is required for a new creation');
+      job = { kind: 'new', prompt };
+    }
 
     const spinnerFrames = buildSpinnerFrames();
     for (let i = 0; i < spinnerFrames.length; i++) {
@@ -127,7 +174,7 @@ export default class AiPixelsWidget extends Widget {
     this.every(LOADER_TICK_MS, () => this.loaderTick());
     // Generation takes a while — run it after start() returns so the widget
     // shows as running with the live loader meanwhile.
-    void this.produce(prompt, duration);
+    void this.produce(job, duration);
   }
 
   async stop(): Promise<void> {
@@ -172,23 +219,31 @@ export default class AiPixelsWidget extends Widget {
     }
   }
 
-  private async produce(prompt: string, durationSeconds: number): Promise<void> {
+  private async produce(job: ProduceJob, durationSeconds: number): Promise<void> {
     try {
-      const provider = String(this.config.provider || 'claude');
-      const model = this.config.model ? String(this.config.model) : undefined;
-      this.log.info(`Generating "${prompt}" (~${durationSeconds}s) via ${provider}${model ? ` [${model}]` : ''}…`);
-      this.genAbort = new AbortController();
-      const text = await generateMovie({
-        provider,
-        apiKey: this.config.apiKey ? String(this.config.apiKey) : undefined,
-        model,
-        effort: String(this.config.effort || 'medium'),
-        prompt,
-        durationSeconds,
-        onProgress: (line) => { this.status = line; },
-        onReasoning: (line) => this.log.debug(line), // full reasoning → console + portal logs
-        signal: this.genAbort.signal,
-      });
+      let text: string;
+      if (job.kind === 'replay') {
+        this.log.info(`Replaying "${job.base.prompt}" — no AI call`);
+        text = job.base.movie;
+      } else {
+        const provider = String(this.config.provider || 'claude');
+        const model = this.config.model ? String(this.config.model) : undefined;
+        const verb = job.kind === 'refine' ? `Refining "${job.base.prompt}" with "${job.prompt}"` : `Generating "${job.prompt}"`;
+        this.log.info(`${verb} (~${durationSeconds}s) via ${provider}${model ? ` [${model}]` : ''}…`);
+        this.genAbort = new AbortController();
+        text = await generateMovie({
+          provider,
+          apiKey: this.config.apiKey ? String(this.config.apiKey) : undefined,
+          model,
+          effort: String(this.config.effort || 'medium'),
+          prompt: job.prompt,
+          durationSeconds,
+          baseMovie: job.kind === 'refine' ? job.base.movie : undefined,
+          onProgress: (line) => { this.status = line; },
+          onReasoning: (line) => this.log.debug(line), // full reasoning → console + portal logs
+          signal: this.genAbort.signal,
+        });
+      }
       if (this.stopped) return;
 
       const frames = parseMovie(text);
@@ -196,6 +251,11 @@ export default class AiPixelsWidget extends Widget {
         throw new Error('The model returned nothing parsable — try again or rephrase the prompt');
       }
       this.log.info(`Movie ready: ${frames.length} frames, ${(movieDurationMs(frames) / 1000).toFixed(1)}s per loop`);
+      if (job.kind !== 'replay') {
+        const label = job.kind === 'refine' ? `${job.base.prompt} → ${job.prompt}` : job.prompt;
+        saveMovie(label.slice(0, 120), text);
+        this.log.info('Creation saved — replay or refine it from the Start dialog');
+      }
       this.status = 'upload';
 
       // Encode + upload unique frames only (HOLDs reuse the previous asset)

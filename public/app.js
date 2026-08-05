@@ -176,7 +176,9 @@ async function renderWidgets() {
 
   app.querySelectorAll('[data-start]').forEach((btn) =>
     btn.addEventListener('click', async () => {
-      const widget = widgets.find((w) => w.id === btn.dataset.start);
+      // Fresh fetch: dynamic launch schemas (e.g. saved creations) may have
+      // changed since the page was rendered
+      const widget = await api('GET', `/api/widgets/${btn.dataset.start}`).catch(() => null);
       let launch = {};
       if (widget && Object.keys(widget.launchSchema || {}).length > 0) {
         launch = await promptLaunchValues(widget);

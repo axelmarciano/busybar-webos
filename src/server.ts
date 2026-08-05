@@ -5,7 +5,7 @@ import { previewFile } from './core/preview';
 import { bar, BusyBarClient, type HttpAccessMode } from './busybar/client';
 import { getStoredConfig, setWidgetConfig } from './core/config';
 import { getLogs } from './core/logger';
-import { registry } from './core/registry';
+import { registry, resolveLaunchSchema } from './core/registry';
 import { runtime } from './core/runtime';
 import { getSettings, updateSettings, type Settings } from './settings';
 
@@ -27,7 +27,7 @@ export function createServer(): express.Express {
         id: def.id,
         title: def.title,
         description: def.description,
-        launchSchema: def.launchSchema,
+        launchSchema: resolveLaunchSchema(def),
         has_preview: previewFile(def.id) !== null,
         ...runtime.statusOf(def.id),
       }))
@@ -45,7 +45,7 @@ export function createServer(): express.Express {
       title: def.title,
       description: def.description,
       configSchema: def.configSchema,
-      launchSchema: def.launchSchema,
+      launchSchema: resolveLaunchSchema(def),
       config: getStoredConfig(def.id),
       has_preview: previewFile(def.id) !== null,
       ...runtime.statusOf(def.id),

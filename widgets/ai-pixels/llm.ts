@@ -82,10 +82,12 @@ export interface GenerateOptions {
   provider: string; // 'claude' | 'codex' | 'anthropic' | 'openai'
   apiKey?: string;
   model?: string;
-  /** 'low' (default — fast, pixel art needs no deep reasoning) | 'medium' | 'high' */
+  /** 'low' | 'medium' (default) | 'high' */
   effort?: string;
   prompt: string;
   durationSeconds: number;
+  /** When set, the prompt is a refinement instruction applied to this movie */
+  baseMovie?: string;
   /** Short display status: "dreaming", "frame 12", "writing"… (~9 chars fit) */
   onProgress?: (status: string) => void;
   /** Full reasoning stream, one line at a time — meant for logs */
@@ -94,9 +96,21 @@ export interface GenerateOptions {
   signal?: AbortSignal;
 }
 
+export function buildRefinePrompt(instruction: string, durationSeconds: number, baseMovie: string): string {
+  return `${buildDirectorPrompt(instruction, durationSeconds)}
+
+IMPORTANT — this is a REFINEMENT, not a new creation. Here is the CURRENT animation:
+
+${baseMovie}
+
+Apply the REQUEST above as a modification of this animation. Keep everything the request doesn't concern (palette, sprites, structure) and output the FULL updated animation in the same format.`;
+}
+
 /** Returns the raw movie text produced by the chosen provider. */
 export async function generateMovie(opts: GenerateOptions): Promise<string> {
-  const directorPrompt = buildDirectorPrompt(opts.prompt, opts.durationSeconds);
+  const directorPrompt = opts.baseMovie
+    ? buildRefinePrompt(opts.prompt, opts.durationSeconds, opts.baseMovie)
+    : buildDirectorPrompt(opts.prompt, opts.durationSeconds);
   switch (opts.provider) {
     case 'claude':
       return generateViaClaudeCli(directorPrompt, opts);

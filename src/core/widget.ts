@@ -64,6 +64,12 @@ export abstract class Widget {
    * (unlike configSchema, values are not persisted). Empty = start immediately.
    */
   static launchSchema: ConfigSchema = {};
+  /**
+   * Optional dynamic variant, re-evaluated on every request — for launch
+   * fields whose options change at runtime (e.g. a list of saved items).
+   * Takes precedence over launchSchema when defined.
+   */
+  static dynamicLaunchSchema?: () => ConfigSchema;
 
   /** Identifier = folder name under widgets/. Also used as application_name on the device. */
   readonly id: string;
@@ -147,4 +153,5 @@ export type WidgetClass = (new (ctx: WidgetContext) => Widget) & {
   order: number;
   configSchema: ConfigSchema;
   launchSchema: ConfigSchema;
+  dynamicLaunchSchema?: () => ConfigSchema;
 };
