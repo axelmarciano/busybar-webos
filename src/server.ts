@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import path from 'node:path';
 import { deviceFrameToBmp } from './frame';
 import { previewFile } from './core/preview';
-import { bar } from './busybar/client';
+import { bar, BusyBarClient, type HttpAccessMode } from './busybar/client';
 import { getStoredConfig, setWidgetConfig } from './core/config';
 import { getLogs } from './core/logger';
 import { registry } from './core/registry';
@@ -75,7 +75,12 @@ export function createServer(): express.Express {
       res.status(404).json({ error: 'Unknown widget' });
       return;
     }
-    setWidgetConfig(def.id, def.configSchema, req.body ?? {});
+    try {
+      setWidgetConfig(def.id, def.configSchema, req.body ?? {});
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
     res.json({ result: 'OK' });
   });
 
@@ -96,6 +101,31 @@ export function createServer(): express.Express {
   // --- Device proxy (for the portal) ---
   app.get('/api/device/status', wrap(async (_req, res) => {
     res.json(await bar.status());
+  }));
+
+  // Probe a candidate connection (form values merged over saved settings) without saving it
+  app.post('/api/device/test', wrap(async (req, res) => {
+    const candidate: Settings = { ...getSettings(), ...((req.body ?? {}) as Partial<Settings>) };
+    const probe = new BusyBarClient(() => candidate);
+    const version = await probe.version();
+    const status = await probe.status().catch(() => ({} as Record<string, unknown>));
+    res.json({ ok: true, api_semver: version.api_semver, status });
+  }));
+
+  app.get('/api/device/access', wrap(async (_req, res) => {
+    res.json(await bar.access());
+  }));
+
+  app.post('/api/device/access', wrap(async (req, res) => {
+    const { mode, key } = (req.body ?? {}) as { mode?: HttpAccessMode; key?: string };
+    if (!mode || !['disabled', 'enabled', 'key'].includes(mode)) {
+      res.status(400).json({ error: 'mode must be disabled, enabled or key' });
+      return;
+    }
+    await bar.setAccess(mode, key);
+    // Mirror the key into the portal's Wi-Fi settings so its own requests keep working
+    if (mode === 'key' && key) updateSettings({ api_token: key });
+    res.json({ result: 'OK' });
   }));
 
   app.get('/api/device/screen', wrap(async (req, res) => {

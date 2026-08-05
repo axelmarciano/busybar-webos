@@ -22,8 +22,12 @@ export default class WeatherWidget extends Widget {
   static title = 'Weather';
   static description = 'Temperature and conditions via Open-Meteo (no API key needed).';
   static configSchema = {
-    latitude: { type: 'number' as const, label: 'Latitude', required: true, default: 48.8566 },
-    longitude: { type: 'number' as const, label: 'Longitude', required: true, default: 2.3522 },
+    location: {
+      type: 'location' as const,
+      label: 'Location',
+      required: true,
+      default: '48.8566,2.3522',
+    },
   };
 
   async start(): Promise<void> {
@@ -35,7 +39,7 @@ export default class WeatherWidget extends Widget {
   }
 
   private async refresh(): Promise<void> {
-    const { latitude, longitude } = this.config;
+    const [latitude, longitude] = String(this.config.location).split(',').map(Number);
     const url =
       `https://api.open-meteo.com/v1/forecast?latitude=${latitude}` +
       `&longitude=${longitude}&current_weather=true`;

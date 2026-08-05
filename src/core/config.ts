@@ -35,29 +35,72 @@ export function missingRequiredKeys(widgetId: string, schema: ConfigSchema): str
     .map(([key]) => key);
 }
 
+/** Validates and normalizes one value. Throws a user-readable error if invalid. */
+function coerceValue(key: string, field: ConfigSchema[string], raw: unknown): unknown {
+  switch (field.type) {
+    case 'number': {
+      const num = Number(raw);
+      if (Number.isNaN(num)) throw new Error(`"${key}" must be a number`);
+      return num;
+    }
+    case 'boolean':
+      return raw === true || raw === 'true';
+    case 'color': {
+      const color = String(raw).trim();
+      if (/^#[0-9a-fA-F]{8}$/.test(color)) return color;
+      if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}FF`; // opaque by default
+      throw new Error(`"${key}" must be a #RRGGBB or #RRGGBBAA color`);
+    }
+    case 'location': {
+      const match = String(raw).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+      if (!match) throw new Error(`"${key}" must be "latitude,longitude" (e.g. 48.8566,2.3522)`);
+      const lat = Number(match[1]);
+      const lon = Number(match[2]);
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        throw new Error(`"${key}": latitude must be in [-90,90] and longitude in [-180,180]`);
+      }
+      return `${lat},${lon}`;
+    }
+    default: {
+      const str = String(raw);
+      if (field.pattern && !new RegExp(field.pattern).test(str)) {
+        throw new Error(`"${key}" does not match the expected format (${field.pattern})`);
+      }
+      return str;
+    }
+  }
+}
+
+/**
+ * Validates the whole payload first — nothing is saved if any value is invalid.
+ * Throws with all validation errors joined.
+ */
 export function setWidgetConfig(
   widgetId: string,
   schema: ConfigSchema,
   values: Record<string, unknown>
 ): void {
+  const validated: [key: string, value: unknown | null][] = [];
+  const errors: string[] = [];
+  for (const [key, raw] of Object.entries(values)) {
+    const field = schema[key];
+    if (!field) continue; // key not in schema → ignored
+    if (raw === undefined || raw === null || raw === '') {
+      validated.push([key, null]);
+      continue;
+    }
+    try {
+      validated.push([key, coerceValue(key, field, raw)]);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  if (errors.length > 0) throw new Error(errors.join(' — '));
+
   const apply = db.transaction(() => {
-    for (const [key, raw] of Object.entries(values)) {
-      const field = schema[key];
-      if (!field) continue; // key not in schema → ignored
-      if (raw === undefined || raw === null || raw === '') {
-        remove.run(widgetId, key);
-        continue;
-      }
-      let value: unknown = raw;
-      if (field.type === 'number') {
-        value = Number(raw);
-        if (Number.isNaN(value)) throw new Error(`"${key}" must be a number`);
-      } else if (field.type === 'boolean') {
-        value = raw === true || raw === 'true';
-      } else {
-        value = String(raw);
-      }
-      upsert.run(widgetId, key, JSON.stringify(value));
+    for (const [key, value] of validated) {
+      if (value === null) remove.run(widgetId, key);
+      else upsert.run(widgetId, key, JSON.stringify(value));
     }
   });
   apply();

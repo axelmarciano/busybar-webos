@@ -4,13 +4,23 @@ import type { BusyBarClient, DisplayElement } from '../busybar/client';
 import { showErrorOnDevice } from './device-error';
 import type { WidgetLogger } from './logger';
 
-export type ConfigFieldType = 'string' | 'secret' | 'number' | 'boolean';
+export type ConfigFieldType =
+  | 'string'
+  | 'secret'
+  | 'number'
+  | 'boolean'
+  /** #RRGGBBAA — color picker in the portal */
+  | 'color'
+  /** "lat,lon" — browser geolocation in the portal, plain text fallback */
+  | 'location';
 
 export interface ConfigField {
   type: ConfigFieldType;
   label?: string;
   required?: boolean;
   default?: string | number | boolean;
+  /** Extra validation regex for string/secret values, checked on save */
+  pattern?: string;
 }
 
 export type ConfigSchema = Record<string, ConfigField>;

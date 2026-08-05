@@ -17,13 +17,19 @@
       <a href="#/settings" data-nav="settings">Settings</a>
     </nav>
     <div class="device-panel">
-      <img id="screen-preview" alt="" />
+      <div id="preview-wrap" class="preview-wrap hidden">
+        <img id="screen-preview" alt="" />
+        <button id="preview-expand" class="expand-btn" title="Full screen">⛶</button>
+      </div>
       <div id="device-status" class="device-status">
         <span class="dot offline"></span> Device offline
       </div>
     </div>
   </aside>
   <main id="app"></main>
+  <div id="preview-overlay" class="preview-overlay hidden">
+    <img id="screen-preview-full" alt="" />
+  </div>
   <div id="toast" class="toast hidden"></div>
   <script src="/app.js"></script>
 </body>

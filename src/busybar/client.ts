@@ -1,4 +1,4 @@
-import { deviceBaseUrl, getSettings } from '../settings';
+import { connectionFor, getSettings, type Settings } from '../settings';
 
 export type Align =
   | 'top_left' | 'top_mid' | 'top_right'
@@ -80,6 +80,13 @@ export interface DrawRequest {
   elements: DisplayElement[];
 }
 
+export type HttpAccessMode = 'disabled' | 'enabled' | 'key';
+
+export interface HttpAccessInfo {
+  mode?: HttpAccessMode;
+  key_valid?: boolean;
+}
+
 export class BusyBarError extends Error {
   constructor(message: string, public status: number) {
     super(message);
@@ -96,19 +103,22 @@ interface RequestOptions {
 
 /**
  * Typed HTTP client for the BUSY Bar API.
- * The base URL and token are re-read from settings on every call,
- * so a change made in the portal takes effect immediately.
+ * Settings are re-read on every call, so a change made in the portal takes
+ * effect immediately. Paths are relative to the API root: the device serves
+ * them under /api/, the cloud proxy under /busybar/ (handled by connectionFor).
  */
 export class BusyBarClient {
+  /** Settings source, injectable so a candidate config can be probed before saving */
+  constructor(private readonly settings: () => Settings = getSettings) {}
+
   private async req(method: string, apiPath: string, opts: RequestOptions = {}): Promise<Response> {
-    const url = new URL(deviceBaseUrl() + apiPath);
+    const conn = connectionFor(this.settings());
+    const url = new URL(conn.baseUrl + apiPath);
     for (const [k, v] of Object.entries(opts.query ?? {})) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
 
-    const headers: Record<string, string> = {};
-    const token = getSettings().api_token;
-    if (token) headers['X-API-Token'] = token;
+    const headers: Record<string, string> = { ...conn.headers };
 
     let body: BodyInit | undefined;
     if (opts.json !== undefined) {
@@ -141,29 +151,38 @@ export class BusyBarClient {
 
   // --- System ---
   async version(): Promise<{ api_semver: string }> {
-    return (await this.req('GET', '/api/version')).json() as Promise<{ api_semver: string }>;
+    return (await this.req('GET', '/version')).json() as Promise<{ api_semver: string }>;
   }
 
   async status(): Promise<Record<string, unknown>> {
-    return (await this.req('GET', '/api/status')).json() as Promise<Record<string, unknown>>;
+    return (await this.req('GET', '/status')).json() as Promise<Record<string, unknown>>;
+  }
+
+  /** HTTP API access over Wi-Fi configuration (the device /access setting) */
+  async access(): Promise<HttpAccessInfo> {
+    return (await this.req('GET', '/access')).json() as Promise<HttpAccessInfo>;
+  }
+
+  async setAccess(mode: HttpAccessMode, key?: string): Promise<void> {
+    await this.req('POST', '/access', { query: { mode, key } });
   }
 
   // --- Display ---
   async draw(payload: DrawRequest): Promise<void> {
-    await this.req('POST', '/api/display/draw', { json: payload });
+    await this.req('POST', '/display/draw', { json: payload });
   }
 
   async clearDisplay(applicationName?: string): Promise<void> {
-    await this.req('DELETE', '/api/display/draw', { query: { application_name: applicationName } });
+    await this.req('DELETE', '/display/draw', { query: { application_name: applicationName } });
   }
 
   async setBrightness(value: string | number): Promise<void> {
-    await this.req('POST', '/api/display/brightness', { query: { value } });
+    await this.req('POST', '/display/brightness', { query: { value } });
   }
 
   /** Raw frame of a display (front = 0, back = 1) */
   async screen(display: 0 | 1): Promise<{ contentType: string; data: Buffer }> {
-    const res = await this.req('GET', '/api/screen', { query: { display } });
+    const res = await this.req('GET', '/screen', { query: { display } });
     return {
       contentType: res.headers.get('content-type') ?? 'image/bmp',
       data: Buffer.from(await res.arrayBuffer()),
@@ -172,7 +191,7 @@ export class BusyBarClient {
 
   // --- Assets ---
   async uploadAsset(applicationName: string, file: string, data: Buffer): Promise<void> {
-    await this.req('POST', '/api/assets/upload', {
+    await this.req('POST', '/assets/upload', {
       query: { application_name: applicationName, file },
       body: data,
       timeoutMs: 30_000,
@@ -180,25 +199,25 @@ export class BusyBarClient {
   }
 
   async deleteAssets(applicationName: string): Promise<void> {
-    await this.req('DELETE', '/api/assets/upload', { query: { application_name: applicationName } });
+    await this.req('DELETE', '/assets/upload', { query: { application_name: applicationName } });
   }
 
   // --- Audio ---
   async playAudio(applicationName: string, file: { path: string } | { stock_path: string }): Promise<void> {
-    await this.req('POST', '/api/audio/play', { json: { application_name: applicationName, ...file } });
+    await this.req('POST', '/audio/play', { json: { application_name: applicationName, ...file } });
   }
 
   async stopAudio(): Promise<void> {
-    await this.req('DELETE', '/api/audio/play');
+    await this.req('DELETE', '/audio/play');
   }
 
   async setVolume(volume: number, silent = true): Promise<void> {
-    await this.req('POST', '/api/audio/volume', { query: { volume, silent: silent ? 1 : 0 } });
+    await this.req('POST', '/audio/volume', { query: { volume, silent: silent ? 1 : 0 } });
   }
 
   // --- Input ---
   async sendInput(key: string): Promise<void> {
-    await this.req('POST', '/api/input', { query: { key } });
+    await this.req('POST', '/input', { query: { key } });
   }
 }
 

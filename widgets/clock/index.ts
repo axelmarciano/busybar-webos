@@ -5,7 +5,7 @@ export default class ClockWidget extends Widget {
   static description = 'Shows the current time on the front display.';
   static configSchema = {
     showSeconds: { type: 'boolean' as const, label: 'Show seconds', default: false },
-    color: { type: 'string' as const, label: 'Color (#RRGGBBAA)', default: '#FFFFFFFF' },
+    color: { type: 'color' as const, label: 'Color', default: '#FFFFFFFF' },
   };
 
   async start(): Promise<void> {

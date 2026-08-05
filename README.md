@@ -68,7 +68,22 @@ Restart the server (or let `pnpm dev` reload) to pick up new widgets.
 | `this.uploadAsset(name)` | Upload `widgets/<id>/assets/<name>` to the device |
 | `this.bar` | Full `BusyBarClient` (audio, brightness, input, …) |
 
-Config field types: `string`, `secret` (masked in the portal), `number`, `boolean`. Mark fields `required: true` to block start until they're set. Values are stored in SQLite — secrets in plain text, so keep the DB on a trusted machine.
+Config field types:
+
+| Type | Portal input | Stored value |
+| --- | --- | --- |
+| `string` | text (optional `pattern` regex) | string |
+| `secret` | masked text | string (plain text in SQLite) |
+| `number` | number | number |
+| `boolean` | checkbox | boolean |
+| `color` | color picker | `#RRGGBBAA` (device format) |
+| `location` | "use my location" + text fallback | `"lat,lon"` |
+
+Mark fields `required: true` to block start until they're set. Values are validated server-side on save — an invalid value (bad color, malformed coordinates, regex mismatch…) returns 400 and nothing is stored.
+
+### Preview image
+
+Widget cards in the portal show a preview of the widget's rendering if the widget ships one: put a `preview.png` next to the widget's `index.ts` (`widgets/<id>/preview.png`). Ideal ratio is 72:16 like the front display. No file, no preview.
 
 The front display is 72×16 px; keep drawings small. See the device OpenAPI spec for all element types (text, image, animation, countdown, rectangle).
 

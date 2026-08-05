@@ -1,7 +1,6 @@
 import { bar } from '../busybar/client';
 import { getEffectiveConfig, missingRequiredKeys } from './config';
 import { clearErrorNotice, resetErrorThrottle, showErrorOnDevice } from './device-error';
-import { captureWidgetPreview } from './preview';
 import { WidgetLogger } from './logger';
 import { registry } from './registry';
 import type { Widget } from './widget';
@@ -14,12 +13,9 @@ export interface WidgetStatus {
   error?: string;
 }
 
-const PREVIEW_CAPTURE_DELAY_MS = 5_000;
-
 class Runtime {
   private instances = new Map<string, Widget>();
   private statuses = new Map<string, WidgetStatus>();
-  private previewTimers = new Map<string, NodeJS.Timeout>();
 
   statusOf(id: string): WidgetStatus {
     return this.statuses.get(id) ?? { state: 'stopped' };
@@ -58,18 +54,6 @@ class Runtime {
       await widget.start();
       this.instances.set(id, widget);
       this.statuses.set(id, { state: 'running', startedAt: Date.now() });
-
-      // Snapshot the real screen once the widget has drawn its first data
-      this.previewTimers.set(
-        id,
-        setTimeout(() => {
-          this.previewTimers.delete(id);
-          if (!this.isRunning(id)) return;
-          captureWidgetPreview(id).catch(() => {
-            // device offline — retried on next start
-          });
-        }, PREVIEW_CAPTURE_DELAY_MS)
-      );
     } catch (err) {
       widget._dispose();
       const message = err instanceof Error ? err.message : String(err);
@@ -92,11 +76,6 @@ class Runtime {
       throw new Error(`Widget "${id}" is not running`);
     }
 
-    const previewTimer = this.previewTimers.get(id);
-    if (previewTimer) {
-      clearTimeout(previewTimer);
-      this.previewTimers.delete(id);
-    }
     widget._dispose();
     this.instances.delete(id);
     const log = new WidgetLogger(id);
