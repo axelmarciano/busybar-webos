@@ -26,6 +26,9 @@ importers:
       transliteration:
         specifier: ^2.6.1
         version: 2.6.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.7
       ws:
         specifier: ^8.21.2
         version: 8.21.2
@@ -42,9 +45,6 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.7
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

@@ -198,6 +198,16 @@ export class BusyBarClient {
     };
   }
 
+  // --- Storage ---
+  /** Reads a file from the device's internal storage (/ext/…). */
+  async readStorage(filePath: string): Promise<Buffer> {
+    const res = await this.req('GET', '/storage/read', {
+      query: { path: filePath },
+      timeoutMs: 30_000,
+    });
+    return Buffer.from(await res.arrayBuffer());
+  }
+
   // --- Assets ---
   async uploadAsset(applicationName: string, file: string, data: Buffer): Promise<void> {
     await this.req('POST', '/assets/upload', {

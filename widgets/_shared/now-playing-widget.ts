@@ -45,6 +45,33 @@ export abstract class NowPlayingWidget extends Widget {
     },
   };
 
+  /** Set by subclasses so install-time checks can probe the right player. */
+  static playerApp: PlayerApp;
+
+  /**
+   * Install requires a supported platform, and probes the player once — on
+   * macOS this triggers the automation consent prompt at install time
+   * (queryNowPlaying never launches the app: closed player just reads idle).
+   */
+  static async validateInstall(this: typeof NowPlayingWidget): Promise<void> {
+    if (!platformSupported()) {
+      throw new Error(
+        `Platform "${process.platform}" is not supported — this widget reads the desktop player on macOS or Windows`
+      );
+    }
+    try {
+      await queryNowPlaying(this.playerApp);
+    } catch (err) {
+      if (err instanceof AutomationDeniedError) {
+        await openAutomationSettings().catch(() => {});
+        throw new Error(
+          'Automation access denied — allow it in System Settings (just opened) and install again'
+        );
+      }
+      throw err;
+    }
+  }
+
   protected abstract readonly app: PlayerApp;
   protected abstract readonly iconFile: string;
   protected abstract readonly accent: string;

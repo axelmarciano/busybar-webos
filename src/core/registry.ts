@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { packageWidgetsDir, userWidgetsDir } from '../paths';
 import { Widget, type ConfigSchema, type WidgetClass } from './widget';
 
 export interface WidgetDefinition {
@@ -9,24 +10,32 @@ export interface WidgetDefinition {
   title: string;
   description: string;
   order: number;
+  tags: string[];
   configSchema: ConfigSchema;
   launchSchema: ConfigSchema;
+  browserSources: string[];
   ctor: WidgetClass;
 }
-
-const WIDGETS_DIR = path.resolve('widgets');
 
 class Registry {
   private defs = new Map<string, WidgetDefinition>();
 
   async load(): Promise<void> {
     this.defs.clear();
-    if (!fs.existsSync(WIDGETS_DIR)) return;
+    // User widgets (in the data dir) load second so they can override a
+    // bundled widget with the same id.
+    await this.loadDir(packageWidgetsDir);
+    await this.loadDir(userWidgetsDir);
+    console.log(`[registry] ${this.defs.size} widget(s) loaded: ${[...this.defs.keys()].join(', ')}`);
+  }
 
-    for (const entry of fs.readdirSync(WIDGETS_DIR, { withFileTypes: true })) {
+  private async loadDir(widgetsDir: string): Promise<void> {
+    if (!fs.existsSync(widgetsDir)) return;
+
+    for (const entry of fs.readdirSync(widgetsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const id = entry.name;
-      const dir = path.join(WIDGETS_DIR, id);
+      const dir = path.join(widgetsDir, id);
       const entryFile = ['index.ts', 'index.js']
         .map((f) => path.join(dir, f))
         .find((f) => fs.existsSync(f));
@@ -45,15 +54,16 @@ class Registry {
           title: ctor.title ?? id,
           description: ctor.description ?? '',
           order: ctor.order ?? 0,
+          tags: ctor.tags ?? [],
           configSchema: ctor.configSchema ?? {},
           launchSchema: ctor.launchSchema ?? {},
+          browserSources: ctor.browserSources ?? [],
           ctor,
         });
       } catch (err) {
         console.error(`[registry] failed to load ${id}:`, err);
       }
     }
-    console.log(`[registry] ${this.defs.size} widget(s) loaded: ${[...this.defs.keys()].join(', ')}`);
   }
 
   list(): WidgetDefinition[] {

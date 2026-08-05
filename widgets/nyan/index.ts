@@ -8,12 +8,15 @@ const BACKOFF_TICKS = 40;
 export default class NyanWidget extends Widget {
   static title = 'Nyan Cat';
   static description = 'The rainbow cat, looping on the front display. Pure joy, zero productivity.';
+  static tags = ['fun', 'animation'];
   static configSchema = {
-    fps: { type: 'number' as const, label: 'Frames per second (1-15)', default: 8 },
+    fps: { type: 'number' as const, label: 'Frames per second (1-15)', default: 8, min: 1, max: 15 },
     priority: {
       type: 'number' as const,
       label: 'Draw priority (1-100; 90+ shows over a running BUSY session)',
       default: 95,
+      min: 1,
+      max: 100,
     },
   };
 

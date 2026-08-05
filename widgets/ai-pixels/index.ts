@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Widget } from '../../src/core/widget';
 import { BusyBarError } from '../../src/busybar/client';
-import { generateMovie } from './llm';
+import { generateMovie, validateAccess } from './llm';
 import { movieDurationMs, parseMovie, SCREEN_H, SCREEN_W } from './movie';
 import { encodePng } from './png';
 import { getMovie, listMovies, saveMovie } from './store';
@@ -42,10 +42,54 @@ function buildSpinnerFrames(): Buffer[] {
   return frames;
 }
 
+/** Which provider(s) each selectable model belongs to (mirrors the option labels). */
+const MODEL_PROVIDERS: Record<string, string[]> = {
+  'claude-fable-5': ['anthropic'],
+  'claude-opus-5': ['anthropic'],
+  'claude-opus-4-8': ['anthropic'],
+  'claude-sonnet-5': ['anthropic'],
+  'claude-haiku-4-5': ['anthropic'],
+  'gpt-5.4-pro': ['openai'],
+  'gpt-5.4': ['openai', 'codex'],
+  'gpt-5.4-mini': ['openai'],
+  'o4-mini': ['openai'],
+  fable: ['claude'],
+  opus: ['claude'],
+  sonnet: ['claude'],
+  haiku: ['claude'],
+  'gpt-5.5': ['codex'],
+  'gpt-5.3-codex': ['codex'],
+};
+
 export default class AiPixelsWidget extends Widget {
   static title = 'AI Pixels';
   static description =
     'Give the AI a prompt ("cozy fireplace", "Stitch vs King Kong"…) — it composes a full pixel movie, frames and timing included, and takes over the display.';
+  static tags = ['fun', 'ai', 'animation'];
+
+  /** Cross-field rules, enforced on every save: no key-less API provider, no mismatched model. */
+  static validateConfig(config: Record<string, unknown>): void {
+    const provider = String(config.provider || 'claude');
+    const model = String(config.model || '');
+    if (['anthropic', 'openai'].includes(provider) && !config.apiKey) {
+      throw new Error(`Provider "${provider}" requires an API key — set it or switch to a CLI provider`);
+    }
+    if (model && !(MODEL_PROVIDERS[model] ?? []).includes(provider)) {
+      throw new Error(
+        `Model "${model}" is not available with provider "${provider}" — pick a matching model or Auto`
+      );
+    }
+  }
+
+  /** Install requires working LLM access: CLI present, or API key that answers. */
+  static async validateInstall(config: Record<string, unknown>): Promise<void> {
+    await validateAccess({
+      provider: String(config.provider || 'claude'),
+      apiKey: config.apiKey ? String(config.apiKey) : undefined,
+      model: config.model ? String(config.model) : undefined,
+    });
+  }
+
   static configSchema = {
     provider: {
       type: 'select' as const,
@@ -95,6 +139,8 @@ export default class AiPixelsWidget extends Widget {
       type: 'number' as const,
       label: 'Draw priority (1-100; 90+ shows over a running BUSY session)',
       default: 95,
+      min: 1,
+      max: 100,
     },
   };
   static launchSchema = {
@@ -107,6 +153,8 @@ export default class AiPixelsWidget extends Widget {
       type: 'number' as const,
       label: 'Movie length in seconds (then it loops)',
       default: 15,
+      min: 3,
+      max: 120,
     },
   };
 
@@ -135,6 +183,8 @@ export default class AiPixelsWidget extends Widget {
         type: 'number' as const,
         label: 'Movie length in seconds (then it loops)',
         default: 15,
+        min: 3,
+        max: 120,
       },
     };
   };

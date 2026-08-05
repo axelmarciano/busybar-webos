@@ -1,5 +1,6 @@
 import { bar } from '../busybar/client';
 import { coerceLaunchValues, getEffectiveConfig, missingRequiredKeys } from './config';
+import { isInstalled } from './installed';
 import { clearErrorNotice, resetErrorThrottle, showErrorOnDevice } from './device-error';
 import { WidgetLogger } from './logger';
 import { registry, resolveLaunchSchema } from './registry';
@@ -24,6 +25,7 @@ class Runtime {
   async start(id: string, launch: Record<string, unknown> = {}): Promise<void> {
     const def = registry.get(id);
     if (!def) throw new Error(`Unknown widget: ${id}`);
+    if (!isInstalled(id)) throw new Error(`Widget "${id}" is not installed — install it first`);
     if (this.instances.has(id)) throw new Error(`Widget "${id}" is already running`);
 
     // Validated before anything is stopped, so a bad launch value is a no-op
@@ -109,6 +111,13 @@ class Runtime {
     for (const id of [...this.instances.keys()]) {
       await this.stop(id).catch(() => {});
     }
+  }
+
+  /** Forwards a portal message to the running widget instance. */
+  deliver(id: string, payload: unknown): void {
+    const widget = this.instances.get(id);
+    if (!widget) throw new Error(`Widget "${id}" is not running`);
+    widget.onMessage?.(payload);
   }
 
   isRunning(id: string): boolean {

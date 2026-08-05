@@ -1,5 +1,6 @@
 import { registry } from './core/registry';
 import { runtime } from './core/runtime';
+import { dataDir, userWidgetsDir } from './paths';
 import { attachScreenStream } from './screen-stream';
 import { createServer } from './server';
 
@@ -11,6 +12,7 @@ async function main(): Promise<void> {
   const app = createServer();
   const server = app.listen(PORT, () => {
     console.log(`BUSY Web OS → http://localhost:${PORT}`);
+    console.log(`Data: ${dataDir} · your own widgets go in ${userWidgetsDir}`);
   });
   attachScreenStream(server);
 

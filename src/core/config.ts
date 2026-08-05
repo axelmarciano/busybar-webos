@@ -7,6 +7,12 @@ const upsert = db.prepare(`
   ON CONFLICT(widget_id, key) DO UPDATE SET value = excluded.value
 `);
 const remove = db.prepare('DELETE FROM widget_config WHERE widget_id = ? AND key = ?');
+const removeAll = db.prepare('DELETE FROM widget_config WHERE widget_id = ?');
+
+/** Drops every stored value for a widget (used on uninstall). */
+export function clearWidgetConfig(widgetId: string): void {
+  removeAll.run(widgetId);
+}
 
 /** Values stored in DB, without defaults. */
 export function getStoredConfig(widgetId: string): Record<string, unknown> {
@@ -23,13 +29,17 @@ export function getEffectiveConfig(widgetId: string, schema: ConfigSchema): Reco
   return { ...values, ...getStoredConfig(widgetId) };
 }
 
-/** Keys required by the schema but missing/empty. */
+/**
+ * Keys required by the schema but not explicitly configured.
+ * A schema `default` does NOT satisfy a required field — the user must set
+ * the value themselves (e.g. weather must not install with a default city).
+ */
 export function missingRequiredKeys(widgetId: string, schema: ConfigSchema): string[] {
-  const config = getEffectiveConfig(widgetId, schema);
+  const stored = getStoredConfig(widgetId);
   return Object.entries(schema)
     .filter(([key, field]) => {
       if (!field.required) return false;
-      const value = config[key];
+      const value = stored[key];
       return value === undefined || value === null || value === '';
     })
     .map(([key]) => key);
@@ -41,6 +51,12 @@ function coerceValue(key: string, field: ConfigSchema[string], raw: unknown): un
     case 'number': {
       const num = Number(raw);
       if (Number.isNaN(num)) throw new Error(`"${key}" must be a number`);
+      if (field.min !== undefined && num < field.min) {
+        throw new Error(`"${key}" must be at least ${field.min}`);
+      }
+      if (field.max !== undefined && num > field.max) {
+        throw new Error(`"${key}" must be at most ${field.max}`);
+      }
       return num;
     }
     case 'boolean':
@@ -101,12 +117,15 @@ export function coerceLaunchValues(
 
 /**
  * Validates the whole payload first — nothing is saved if any value is invalid.
- * Throws with all validation errors joined.
+ * Throws with all validation errors joined. `checkFinal` (the widget's own
+ * validateConfig) receives the would-be effective config and can veto the save
+ * by throwing (cross-field rules like "this provider needs an API key").
  */
 export function setWidgetConfig(
   widgetId: string,
   schema: ConfigSchema,
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  checkFinal?: (finalConfig: Record<string, unknown>) => void
 ): void {
   const validated: [key: string, value: unknown | null][] = [];
   const errors: string[] = [];
@@ -124,6 +143,15 @@ export function setWidgetConfig(
     }
   }
   if (errors.length > 0) throw new Error(errors.join(' — '));
+
+  if (checkFinal) {
+    const finalConfig = getEffectiveConfig(widgetId, schema);
+    for (const [key, value] of validated) {
+      if (value === null) delete finalConfig[key];
+      else finalConfig[key] = value;
+    }
+    checkFinal(finalConfig);
+  }
 
   const apply = db.transaction(() => {
     for (const [key, value] of validated) {

@@ -26,6 +26,7 @@ function layout(chars: string[]): { x: number; char: string }[] {
 export default class ClockWidget extends Widget {
   static title = 'Clock';
   static description = 'Full-width dot-matrix clock.';
+  static tags = ['clock', 'time'];
   static configSchema = {
     showSeconds: { type: 'boolean' as const, label: 'Show seconds', default: true },
   };

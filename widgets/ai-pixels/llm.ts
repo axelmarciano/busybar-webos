@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
-import { streamText } from 'ai';
+import { generateText, streamText } from 'ai';
 import { SCREEN_H, SCREEN_W } from './movie';
 
 /** Local CLIs code + iterate, the APIs one-shot — give everyone plenty of room */
@@ -327,4 +327,54 @@ async function generateViaApi(directorPrompt: string, opts: GenerateOptions): Pr
     }
   }
   return answer;
+}
+
+/**
+ * Minimal end-to-end access check for the chosen provider, used at install:
+ * CLI providers must be present on the machine, API providers must answer
+ * a one-word prompt with the configured key.
+ */
+export async function validateAccess(
+  opts: Pick<GenerateOptions, 'provider' | 'apiKey' | 'model'>
+): Promise<void> {
+  if ((CLI_PROVIDERS as readonly string[]).includes(opts.provider)) {
+    const command = opts.provider === 'claude' ? 'claude' : 'codex';
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, ['--version'], {
+        cwd: os.tmpdir(),
+        stdio: ['ignore', 'ignore', 'ignore'],
+        signal: AbortSignal.timeout(15_000),
+      });
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        reject(
+          err.code === 'ENOENT'
+            ? new Error(`"${command}" CLI not found on this machine — install it or switch to an API provider`)
+            : err
+        );
+      });
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`"${command}" CLI is not working (exit code ${code})`));
+      });
+    });
+    return;
+  }
+
+  if (!opts.apiKey) {
+    throw new Error(`Provider "${opts.provider}" needs an API key in the widget configuration`);
+  }
+  const modelId = opts.model || DEFAULT_API_MODEL[opts.provider];
+  const model =
+    opts.provider === 'anthropic'
+      ? createAnthropic({ apiKey: opts.apiKey })(modelId)
+      : createOpenAI({ apiKey: opts.apiKey })(modelId);
+  const result = await generateText({
+    model,
+    prompt: 'Reply with exactly: OK',
+    maxOutputTokens: 1_000,
+    abortSignal: AbortSignal.timeout(30_000),
+  });
+  if (!result.text.trim()) {
+    throw new Error(`The model "${modelId}" answered empty — check the key and model`);
+  }
 }

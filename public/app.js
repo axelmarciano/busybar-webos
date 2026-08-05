@@ -137,73 +137,457 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') overlay.classList.add('hidden');
 });
 
-// --- Pages ---
+// --- Browser sources ---
+// Some widgets need data only the browser can capture (mic level today —
+// camera, key events, tab audio tomorrow). A widget declares what it consumes
+// with `static browserSources = ['microphone']`; the portal renders a capture
+// panel per source on the widget's page and streams every payload to
+// POST /api/widgets/<id>/message as {source, ...data}. Adding a source =
+// adding an entry to this registry; no other portal change needed.
+// Capture survives page changes inside the portal; it stops when the tab
+// closes, the widget stops, or the user clicks the toggle.
+//
+// A source implements:
+//   title / hint / enableLabel / disableLabel — panel texts
+//   liveHtml — markup for its live visualization inside the panel
+//   start(emit, live) → cleanup function. Throw a user-readable Error when
+//     the capture can't start. `emit(data)` streams to the widget; `live()`
+//     returns the panel's live container, or null when not displayed.
 
-async function renderWidgets() {
-  const widgets = await api('GET', '/api/widgets');
-  app.innerHTML = `
-    <h1>Widgets</h1>
-    <div class="grid">
-      ${widgets.map((w) => `
-        <div class="card">
-          <div class="bar-frame">
-            <div class="bar-screen">
-              ${w.has_preview
-                ? `<img src="/api/widgets/${w.id}/preview" alt="" />`
-                : '<div class="screen-empty">no preview</div>'}
-            </div>
-          </div>
-          <div class="head">
-            <h3>${esc(w.title)}</h3>
-            <span class="badge ${w.state}">${STATE_LABELS[w.state] || w.state}</span>
-          </div>
-          <p>${esc(w.description)}</p>
-          ${w.error ? `<p style="color: var(--red); font-size: 12px;">${esc(w.error)}</p>` : ''}
-          <div class="actions">
-            ${w.state === 'running' || w.state === 'error'
-              ? `<button data-stop="${w.id}">Stop</button>`
-              : ''}
-            ${w.state !== 'running'
-              ? `<button class="primary" data-start="${w.id}">Start</button>`
-              : ''}
-            <button data-open="${w.id}">Configure</button>
+/** Requests every browser permission a widget's sources need (install-time gate). */
+async function ensureBrowserPermissions(widget) {
+  for (const name of (widget && widget.browser_sources) || []) {
+    const source = browserSources[name];
+    if (source && source.ensurePermission) await source.ensurePermission();
+  }
+}
+
+const browserSources = {
+  microphone: {
+    title: 'Microphone',
+    hint: 'Sound is captured by this browser tab and streamed to the bar — keep the tab open. Enabling the microphone also starts the widget if needed.',
+    enableLabel: '🎤 Enable microphone',
+    disableLabel: 'Stop microphone',
+    liveHtml: '<div class="mic-meter"><i data-mic-fill></i></div><span class="source-value" data-mic-value></span>',
+
+    /** True when the browser already granted mic access — capture can auto-start. */
+    async permissionGranted() {
+      try {
+        const status = await navigator.permissions.query({ name: 'microphone' });
+        return status.state === 'granted';
+      } catch {
+        return false;
+      }
+    },
+
+    /** Install-time check: the widget only installs once mic access is granted. */
+    async ensurePermission() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Microphone needs a secure context — open the portal via localhost or https');
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+      } catch {
+        throw new Error('Microphone access denied — allow it in the browser to install this widget');
+      }
+    },
+
+    async start(emit, live) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Microphone needs a secure context — open the portal via localhost or https');
+      }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+      } catch {
+        throw new Error('Microphone access denied — allow it in the browser and retry');
+      }
+      const audioCtx = new AudioContext();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+
+      const timer = setInterval(() => {
+        analyser.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+        const dbfs = rms > 0 ? Math.max(20 * Math.log10(rms), -100) : -100;
+        emit({ level: dbfs });
+        const el = live();
+        if (el) {
+          const pct = Math.min(Math.max((dbfs + 60) / 60, 0), 1) * 100;
+          el.querySelector('[data-mic-fill]').style.width = `${pct}%`;
+          el.querySelector('[data-mic-value]').textContent = `${dbfs.toFixed(1)} dBFS`;
+        }
+      }, 200);
+
+      return () => {
+        clearInterval(timer);
+        stream.getTracks().forEach((t) => t.stop());
+        audioCtx.close().catch(() => {});
+      };
+    },
+  },
+
+  buzzer: {
+    title: 'Buzzer button',
+    hint: 'Smash the button (or hit Space) — the bar flashes and makes the noise. Open this page on your phone for a wireless game-show buzzer.',
+    enableLabel: '🔴 Arm the buzzer',
+    disableLabel: 'Disarm',
+    liveHtml: '<button type="button" class="buzzer-btn" data-buzz>BUZZ</button>',
+
+    async start(emit, live) {
+      const pulse = () => {
+        const btn = live() && live().querySelector('[data-buzz]');
+        if (!btn) return;
+        btn.classList.add('pressed');
+        setTimeout(() => btn.classList.remove('pressed'), 150);
+      };
+      const press = () => {
+        emit({ press: true });
+        pulse();
+        if (navigator.vibrate) navigator.vibrate(80);
+      };
+      // Delegated listeners: survive panel re-renders and page navigation
+      const onClick = (e) => {
+        if (e.target.closest && e.target.closest('[data-buzz]')) press();
+      };
+      const onKey = (e) => {
+        if (e.code === 'Space' && live() && !e.repeat && e.target.tagName !== 'INPUT') {
+          e.preventDefault();
+          press();
+        }
+      };
+      document.addEventListener('click', onClick);
+      document.addEventListener('keydown', onKey);
+      return () => {
+        document.removeEventListener('click', onClick);
+        document.removeEventListener('keydown', onKey);
+      };
+    },
+  },
+};
+
+// Running captures: source key → { widgetId, cleanup }
+const activeCaptures = new Map();
+
+async function startCapture(key, widgetId) {
+  if (activeCaptures.has(key)) return;
+  const emit = async (data) => {
+    try {
+      const res = await fetch(`/api/widgets/${widgetId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: key, ...data }),
+      });
+      if (res.status === 409) stopCapture(key); // widget no longer running
+    } catch {
+      // server briefly unreachable — keep trying
+    }
+  };
+  const live = () => document.querySelector(`[data-source-panel="${key}"] .source-live`);
+  const cleanup = await browserSources[key].start(emit, live);
+  activeCaptures.set(key, { widgetId, cleanup });
+  renderSourcePanelStates();
+}
+
+function stopCapture(key) {
+  const capture = activeCaptures.get(key);
+  if (!capture) return;
+  activeCaptures.delete(key);
+  capture.cleanup();
+  renderSourcePanelStates();
+}
+
+/** Syncs every source panel currently in the DOM with its capture state. */
+function renderSourcePanelStates() {
+  document.querySelectorAll('[data-source-panel]').forEach((panel) => {
+    const source = browserSources[panel.dataset.sourcePanel];
+    const active = activeCaptures.has(panel.dataset.sourcePanel);
+    const btn = panel.querySelector('[data-source-toggle]');
+    btn.textContent = active ? source.disableLabel : source.enableLabel;
+    btn.classList.toggle('primary', !active);
+    panel.querySelector('.source-live').style.display = active ? 'flex' : 'none';
+  });
+}
+
+function sourcePanelsHtml(widget) {
+  return (widget.browser_sources || [])
+    .filter((key) => browserSources[key])
+    .map((key) => {
+      const source = browserSources[key];
+      return `
+        <h2>${esc(source.title)}</h2>
+        <div class="panel" data-source-panel="${esc(key)}">
+          <p class="hint" style="margin-top: 0;">${esc(source.hint)}</p>
+          <div class="source-row">
+            <button type="button" data-source-toggle></button>
+            <div class="source-live">${source.liveHtml}</div>
           </div>
         </div>
-      `).join('')}
-    </div>
-    ${widgets.length === 0 ? '<p class="empty">No widgets found in widgets/.</p>' : ''}
-  `;
+      `;
+    }).join('');
+}
 
-  app.querySelectorAll('[data-start]').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      // Fresh fetch: dynamic launch schemas (e.g. saved creations) may have
-      // changed since the page was rendered
-      const widget = await api('GET', `/api/widgets/${btn.dataset.start}`).catch(() => null);
-      let launch = {};
-      if (widget && Object.keys(widget.launchSchema || {}).length > 0) {
-        launch = await promptLaunchValues(widget);
-        if (launch === null) return; // cancelled
+function mountSourcePanels(widget) {
+  document.querySelectorAll('[data-source-panel]').forEach((panel) => {
+    const key = panel.dataset.sourcePanel;
+    panel.querySelector('[data-source-toggle]').addEventListener('click', async (e) => {
+      if (activeCaptures.has(key)) {
+        stopCapture(key);
+        return;
       }
-      btn.disabled = true;
+      e.target.disabled = true;
       try {
-        await api('POST', `/api/widgets/${btn.dataset.start}/start`, { launch });
-        toast(`${btn.dataset.start} started`);
+        // The capture streams into the running widget — start it first if needed
+        const fresh = await api('GET', `/api/widgets/${widget.id}`).catch(() => null);
+        if (fresh && fresh.state !== 'running') {
+          await api('POST', `/api/widgets/${widget.id}/start`, { launch: {} });
+          toast(`${widget.id} started`);
+        }
+        await startCapture(key, widget.id);
       } catch (err) {
         toast(err.message, true);
       }
-      renderWidgets();
+      e.target.disabled = false;
+      renderSourcePanelStates();
+    });
+  });
+  renderSourcePanelStates();
+
+  // Permission already granted + widget running → capture starts by itself,
+  // no pointless "enable" click
+  (widget.browser_sources || []).forEach(async (key) => {
+    const source = browserSources[key];
+    if (!source || activeCaptures.has(key)) return;
+    if (widget.state === 'running' && source.permissionGranted && (await source.permissionGranted())) {
+      try {
+        await startCapture(key, widget.id);
+      } catch {
+        // stays manual — the toggle button is right there
+      }
+    }
+  });
+}
+
+// --- Pages ---
+
+function widgetCardHtml(w, tab) {
+  const preview = `
+    <div class="bar-frame">
+      <div class="bar-screen">
+        ${w.has_preview
+          ? `<img src="/api/widgets/${w.id}/preview" alt="" />`
+          : '<div class="screen-empty">no preview</div>'}
+      </div>
+    </div>`;
+  const tags = (w.tags || []).length
+    ? `<div class="tags">${(w.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
+    : '';
+  const searchable = [w.id, w.title, w.description, ...(w.tags || [])].join(' ').toLowerCase();
+  const open = `<div class="card" data-search="${esc(searchable)}" data-tags="${esc((w.tags || []).join(','))}">`;
+
+  if (tab === 'all') {
+    return `${open}
+      ${preview}
+      <div class="head">
+        <h3>${esc(w.title)}</h3>
+        ${w.installed ? '<span class="badge installed">Installed</span>' : ''}
+      </div>
+      <p>${esc(w.description)}</p>
+      ${tags}
+      <div class="actions">
+        ${w.installed
+          ? `<button class="danger" data-uninstall="${w.id}">Uninstall</button>`
+          : `<button class="primary" data-install="${w.id}">Install</button>`}
+        <button data-open="${w.id}">Configure</button>
+      </div>
+    </div>`;
+  }
+
+  return `${open}
+    ${preview}
+    <div class="head">
+      <h3>${esc(w.title)}</h3>
+      <span class="badge ${w.state}">${STATE_LABELS[w.state] || w.state}</span>
+    </div>
+    <p>${esc(w.description)}</p>
+    ${w.error ? `<p style="color: var(--red); font-size: 12px;">${esc(w.error)}</p>` : ''}
+    ${tags}
+    <div class="actions">
+      ${w.state === 'running' || w.state === 'error'
+        ? `<button data-stop="${w.id}">Stop</button>`
+        : ''}
+      ${w.state !== 'running'
+        ? `<button class="primary" data-start="${w.id}">Start</button>`
+        : ''}
+      <button data-open="${w.id}">Configure</button>
+    </div>
+  </div>`;
+}
+
+async function renderWidgets(tab = 'installed') {
+  const widgets = await api('GET', '/api/widgets');
+  const installedCount = widgets.filter((w) => w.installed).length;
+  const shown = tab === 'installed' ? widgets.filter((w) => w.installed) : widgets;
+  const allTags = [...new Set(shown.flatMap((w) => w.tags || []))].sort();
+
+  app.innerHTML = `
+    <h1>Widgets</h1>
+    <div class="tabs">
+      <a class="tab ${tab === 'installed' ? 'active' : ''}" href="#/widgets">Installed widgets <span class="count">${installedCount}</span></a>
+      <a class="tab ${tab === 'all' ? 'active' : ''}" href="#/widgets/all">All widgets <span class="count">${widgets.length}</span></a>
+    </div>
+    ${shown.length > 0 ? `
+      <div class="filter-bar">
+        <input id="widget-search" class="search-input" type="search" placeholder="Search widgets…" autocomplete="off" />
+        ${allTags.map((t) => `<button class="chip" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}
+      </div>` : ''}
+    <div class="grid">
+      ${shown.map((w) => widgetCardHtml(w, tab)).join('')}
+    </div>
+    <p class="empty hidden" id="no-results">No widgets match.</p>
+    ${shown.length === 0
+      ? (tab === 'installed'
+          ? '<p class="empty">No installed widgets yet — pick some in <a href="#/widgets/all">All widgets</a>.</p>'
+          : '<p class="empty">No widgets found in widgets/.</p>')
+      : ''}
+  `;
+
+  // Search + tag filtering (client-side)
+  let activeTag = null;
+  const searchInput = document.getElementById('widget-search');
+  function applyFilters() {
+    const query = (searchInput?.value || '').trim().toLowerCase();
+    let visible = 0;
+    app.querySelectorAll('.grid .card').forEach((card) => {
+      const matchesQuery = !query || card.dataset.search.includes(query);
+      const matchesTag = !activeTag || card.dataset.tags.split(',').includes(activeTag);
+      const show = matchesQuery && matchesTag;
+      card.classList.toggle('hidden', !show);
+      if (show) visible++;
+    });
+    const noResults = document.getElementById('no-results');
+    if (noResults) noResults.classList.toggle('hidden', visible > 0 || shown.length === 0);
+  }
+  if (searchInput) searchInput.addEventListener('input', applyFilters);
+  app.querySelectorAll('.chip[data-tag]').forEach((chip) =>
+    chip.addEventListener('click', () => {
+      activeTag = activeTag === chip.dataset.tag ? null : chip.dataset.tag;
+      app.querySelectorAll('.chip[data-tag]').forEach((c) =>
+        c.classList.toggle('active', c.dataset.tag === activeTag)
+      );
+      applyFilters();
     })
+  );
+
+  // Install / uninstall
+  app.querySelectorAll('[data-install]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.install;
+      const widget = widgets.find((w) => w.id === id);
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      try {
+        // Browser permissions first (e.g. microphone), then the server-side
+        // install check (required config + the widget's own validation)
+        await ensureBrowserPermissions(widget);
+        await api('POST', `/api/widgets/${id}/install`);
+        toast(`${id} installed`);
+        renderWidgets(tab);
+      } catch (err) {
+        toast(err.message, true);
+        btn.textContent = 'Install';
+        btn.disabled = false;
+        // Missing required config → send the user to the config page to validate it
+        if (/Configuration required/i.test(err.message)) location.hash = `#/widget/${id}`;
+      }
+    })
+  );
+  app.querySelectorAll('[data-uninstall]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await api('DELETE', `/api/widgets/${btn.dataset.uninstall}/install`);
+        toast(`${btn.dataset.uninstall} uninstalled`);
+      } catch (err) {
+        toast(err.message, true);
+      }
+      renderWidgets(tab);
+    })
+  );
+
+  async function launchWidget(btn, id, endpoint, label) {
+    // Fresh fetch: dynamic launch schemas (e.g. saved creations) may have
+    // changed since the page was rendered
+    const widget = await api('GET', `/api/widgets/${id}`).catch(() => null);
+    let launch = {};
+    if (widget && Object.keys(widget.launchSchema || {}).length > 0) {
+      launch = await promptLaunchValues(widget);
+      if (launch === null) return; // cancelled
+    }
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    try {
+      await api('POST', `/api/widgets/${id}/${endpoint}`, { launch });
+      toast(`${id} ${label}`);
+      // Browser-source widgets: when permission is already granted the capture
+      // starts right here, invisibly. Only an ungranted permission needs the
+      // widget page (its enable button triggers the browser prompt).
+      for (const key of widget?.browser_sources || []) {
+        const source = browserSources[key];
+        if (!source) continue;
+        if (source.permissionGranted && (await source.permissionGranted())) {
+          try {
+            await startCapture(key, id);
+          } catch (err) {
+            toast(err.message, true);
+          }
+        } else {
+          location.hash = `#/widget/${id}`;
+          return;
+        }
+      }
+    } catch (err) {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+      // Bar unreachable → send the user to the connection settings
+      if (/offline|unreachable/i.test(err.message)) {
+        toast('The bar is not reachable — check the connection in Settings', true);
+        location.hash = '#/settings';
+        return;
+      }
+      // Config problem → send the user to the widget's configuration page
+      if (/configuration|not installed/i.test(err.message)) {
+        toast(err.message, true);
+        location.hash = `#/widget/${id}`;
+        return;
+      }
+      toast(err.message, true);
+    }
+    renderWidgets(tab);
+  }
+
+  app.querySelectorAll('[data-start]').forEach((btn) =>
+    btn.addEventListener('click', () => launchWidget(btn, btn.dataset.start, 'start', 'started'))
   );
   app.querySelectorAll('[data-stop]').forEach((btn) =>
     btn.addEventListener('click', async () => {
       btn.disabled = true;
+      btn.textContent = 'Stopping…';
       try {
         await api('POST', `/api/widgets/${btn.dataset.stop}/stop`);
         toast(`${btn.dataset.stop} stopped`);
       } catch (err) {
         toast(err.message, true);
       }
-      renderWidgets();
+      renderWidgets(tab);
     })
   );
   app.querySelectorAll('[data-open]').forEach((btn) =>
@@ -222,15 +606,31 @@ async function renderWidgetDetail(id) {
 
   app.innerHTML = `
     <a class="back" href="#/widgets">← Widgets</a>
-    <h1 style="margin-top: 10px;">${esc(widget.title)}
-      <span class="badge ${widget.state}" style="vertical-align: middle;">${STATE_LABELS[widget.state] || widget.state}</span>
-    </h1>
-    <p style="color: var(--muted);">${esc(widget.description)}</p>
+    <div class="detail-head">
+      <h1>${esc(widget.title)}
+        ${widget.installed
+          ? `<span class="badge ${widget.state}" style="vertical-align: middle;">${STATE_LABELS[widget.state] || widget.state}</span>`
+          : '<span class="badge stopped" style="vertical-align: middle;">Not installed</span>'}
+      </h1>
+      <div class="detail-actions">
+        ${widget.installed
+          ? '<button id="uninstall-btn" class="danger">Uninstall</button>'
+          : (Object.keys(widget.configSchema || {}).length === 0
+              ? '<button id="install-btn" class="primary">Install</button>'
+              : '')}
+      </div>
+    </div>
+    <p class="detail-desc">${esc(widget.description)}</p>
+    ${(widget.tags || []).length
+      ? `<div class="tags" style="margin-top: 12px;">${widget.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
+      : ''}
     ${widget.has_preview
       ? `<div class="bar-frame detail-frame">
           <div class="bar-screen"><img src="/api/widgets/${id}/preview" alt="" /></div>
         </div>`
       : ''}
+
+    ${sourcePanelsHtml(widget)}
 
     ${hasConfig ? `
       <h2>Configuration</h2>
@@ -269,13 +669,33 @@ async function renderWidgetDetail(id) {
             <input type="${inputType}" name="${esc(key)}" value="${esc(value)}"
               placeholder="${placeholder}" ${field.type === 'number' ? 'step="any"' : ''} /></div>`;
         }).join('')}
-        <button class="primary" type="submit">Save</button>
+        <button class="primary" type="submit">${widget.installed ? 'Save' : 'Validate configuration'}</button>
       </form>
     ` : ''}
 
-    <h2>Logs</h2>
+    <div class="section-head">
+      <h2>Logs</h2>
+      <button id="copy-logs" title="Copy logs to clipboard">Copy</button>
+    </div>
     <div class="logs" id="logs"></div>
   `;
+
+  document.getElementById('copy-logs').addEventListener('click', async () => {
+    try {
+      const logs = await api('GET', `/api/widgets/${id}/logs?limit=500`);
+      const text = logs
+        .slice()
+        .reverse() // stored newest-first → copy in chronological order
+        .map((l) => `${new Date(l.created_at).toISOString()} ${l.level.toUpperCase().padEnd(5)} ${l.message}`)
+        .join('\n');
+      await navigator.clipboard.writeText(text || '(no logs)');
+      toast('Logs copied to clipboard');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  mountSourcePanels(widget);
 
   // Config form
   const form = document.getElementById('config-form');
@@ -320,14 +740,54 @@ async function renderWidgetDetail(id) {
           values[key] = input.value + alpha;
         } else values[key] = input.value;
       }
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const originalLabel = submitBtn.textContent;
+      submitBtn.disabled = true;
+      if (!widget.installed) submitBtn.textContent = 'Validating…';
       try {
         await api('PUT', `/api/widgets/${id}/config`, values);
+        if (!widget.installed) {
+          // Valid config = the widget becomes installed (after its own checks:
+          // browser permissions, LLM access, system consent…)
+          await ensureBrowserPermissions(widget);
+          await api('POST', `/api/widgets/${id}/install`);
+          toast('Configuration valid — widget installed');
+          renderWidgetDetail(id);
+          return;
+        }
         toast('Configuration saved');
       } catch (err) {
         toast(err.message, true);
       }
+      submitBtn.textContent = originalLabel;
+      submitBtn.disabled = false;
     });
   }
+
+  // Install (no config needed) / uninstall
+  document.getElementById('install-btn')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Checking…';
+    try {
+      await ensureBrowserPermissions(widget);
+      await api('POST', `/api/widgets/${id}/install`);
+      toast(`${id} installed`);
+      renderWidgetDetail(id);
+    } catch (err) {
+      toast(err.message, true);
+      e.target.textContent = 'Install';
+      e.target.disabled = false;
+    }
+  });
+  document.getElementById('uninstall-btn')?.addEventListener('click', async () => {
+    try {
+      await api('DELETE', `/api/widgets/${id}/install`);
+      toast(`${id} uninstalled`);
+      renderWidgetDetail(id);
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
   // Logs (auto-refresh)
   async function refreshLogs() {
@@ -458,9 +918,20 @@ function mountConnectionForm(root, settings, { submitLabel, onSaved }) {
 
     root.querySelector('[data-save]').addEventListener('click', async (e) => {
       e.target.disabled = true;
+      // Save = test first; an unreachable configuration is never saved
+      resultEl.innerHTML = `${LED_STRIP('testing')}<span>Checking the bar before saving…</span>`;
       try {
-        await api('PUT', '/api/settings', { ...trimmed(draft), setup_done: true });
-        toast('Settings saved');
+        await api('POST', '/api/device/test', trimmed(draft));
+      } catch (err) {
+        resultEl.innerHTML = `${LED_STRIP('fail')}<span class="fail">${esc(friendlyTestError(err.message, draft.access_mode))}</span>`;
+        toast('Not saved — the bar is unreachable with this configuration', true);
+        e.target.disabled = false;
+        return;
+      }
+      try {
+        await api('PUT', '/api/settings', trimmed(draft));
+        resultEl.innerHTML = `${LED_STRIP('ok')}<span class="ok">Connected — settings saved</span>`;
+        toast('Connected & saved');
         pollDevice();
         if (onSaved) onSaved();
       } catch (err) {
@@ -543,54 +1014,106 @@ async function renderSettings() {
   mountConnectionForm(document.getElementById('conn-form'), settings, { submitLabel: 'Save' });
 }
 
-async function renderOnboarding() {
-  const settings = await api('GET', '/api/settings');
+// --- Notifications page ---
+
+const NOTIFY_ICONS = ['info', 'success', 'warning', 'error', 'message', 'bell'];
+
+async function renderNotifications() {
+  const items = await api('GET', '/api/notify');
+
+  const historyHtml = items.length === 0
+    ? '<p class="empty">No notifications yet.</p>'
+    : items.map((n) => `
+        <div class="notif-row">
+          <img src="/notify-icons/${esc(n.icon)}.png" alt="${esc(n.icon)}" />
+          <div class="notif-body">
+            ${n.title ? `<strong>${esc(n.title)}</strong>` : ''}
+            <span>${esc(n.text)}</span>
+          </div>
+          <span class="notif-time">${new Date(n.created_at).toLocaleString()}</span>
+        </div>
+      `).join('');
+
   app.innerHTML = `
-    <div class="onboard">
-      <div class="onboard-bar" aria-hidden="true">${Array.from({ length: 12 }, (_, i) => `<i style="--i:${i}"></i>`).join('')}</div>
-      <h1>Connect your BUSY Bar</h1>
-      <p class="onboard-sub">Pick how this portal reaches the bar — you can change it later in Settings.</p>
-      <div class="panel" id="conn-form"></div>
+    <h1>Notifications</h1>
+    <h2>Send a notification</h2>
+    <form class="panel" id="notify-form">
+      <div class="field">
+        <label>Icon</label>
+        <div class="icon-picker">
+          ${NOTIFY_ICONS.map((icon, i) => `
+            <label class="icon-opt">
+              <input type="radio" name="icon" value="${icon}" ${i === 0 ? 'checked' : ''} />
+              <img src="/notify-icons/${icon}.png" alt="" />
+              <span>${icon}</span>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="field"><label>Title</label>
+        <input type="text" name="title" placeholder="optional" autocomplete="off" /></div>
+      <div class="field"><label>Text <span class="required">*</span></label>
+        <input type="text" name="text" autocomplete="off" /></div>
+      <div class="field"><label>Duration (seconds)</label>
+        <input type="number" name="duration" value="6" min="1" max="300" style="max-width: 120px;" /></div>
+      <div class="field">
+        <label class="check-label"><input type="checkbox" name="sound" checked /> Play sound</label>
+      </div>
+      <button class="primary" type="submit">Send to the bar</button>
+    </form>
+
+    <div class="section-head">
+      <h2>History <span class="opt">— last 100</span></h2>
+      ${items.length > 0 ? '<button id="clear-notifs" class="danger">Clear</button>' : ''}
     </div>
+    <div class="panel">${historyHtml}</div>
   `;
-  mountConnectionForm(document.getElementById('conn-form'), settings, {
-    submitLabel: 'Save & start',
-    onSaved: () => { location.hash = '#/widgets'; },
+
+  const form = document.getElementById('notify-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    try {
+      await api('POST', '/api/notify', {
+        icon: form.elements.icon.value,
+        title: form.elements.title.value.trim() || undefined,
+        text: form.elements.text.value,
+        duration: Number(form.elements.duration.value) || 6,
+        sound: form.elements.sound.checked,
+      });
+      toast('Notification sent to the bar');
+      renderNotifications();
+      return;
+    } catch (err) {
+      toast(err.message, true);
+    }
+    submitBtn.disabled = false;
+  });
+
+  document.getElementById('clear-notifs')?.addEventListener('click', async () => {
+    await api('DELETE', '/api/notify');
+    toast('History cleared');
+    renderNotifications();
   });
 }
 
 // --- Router ---
-
-let setupChecked = false;
 
 async function route() {
   clearInterval(logsTimer);
   const hash = location.hash || '#/widgets';
   const widgetMatch = hash.match(/^#\/widget\/([a-zA-Z0-9._-]+)$/);
 
-  // First load: send fresh installs to onboarding until a connection is saved
-  if (!setupChecked) {
-    setupChecked = true;
-    try {
-      const settings = await api('GET', '/api/settings');
-      if (!settings.setup_done && hash !== '#/onboarding') {
-        location.hash = '#/onboarding';
-        return;
-      }
-    } catch {
-      // server unreachable — fall through, the page will show the error
-    }
-  }
-
   document.querySelectorAll('nav a').forEach((a) => {
     a.classList.toggle('active', hash.startsWith(a.getAttribute('href')) || (widgetMatch && a.dataset.nav === 'widgets'));
   });
 
   try {
-    if (hash === '#/onboarding') await renderOnboarding();
-    else if (widgetMatch) await renderWidgetDetail(widgetMatch[1]);
+    if (widgetMatch) await renderWidgetDetail(widgetMatch[1]);
+    else if (hash === '#/notifications') await renderNotifications();
     else if (hash === '#/settings') await renderSettings();
-    else await renderWidgets();
+    else if (hash === '#/widgets/all') await renderWidgets('all');
+    else await renderWidgets('installed');
   } catch (err) {
     app.innerHTML = `<p class="empty">Error: ${esc(err.message)}</p>`;
   }

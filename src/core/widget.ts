@@ -28,6 +28,9 @@ export interface ConfigField {
   default?: string | number | boolean;
   /** Extra validation regex for string/secret values, checked on save */
   pattern?: string;
+  /** Bounds for number values, checked on save */
+  min?: number;
+  max?: number;
   /** Choices for select fields; values are validated server-side */
   options?: ConfigFieldOption[];
 }
@@ -58,6 +61,8 @@ export abstract class Widget {
   static description = '';
   /** Portal sort key — lower first, ties broken by id. */
   static order = 0;
+  /** Portal categories used for filtering, e.g. ['music', 'productivity'] */
+  static tags: string[] = [];
   static configSchema: ConfigSchema = {};
   /**
    * Fields the portal asks for in a modal each time the widget is started
@@ -70,6 +75,27 @@ export abstract class Widget {
    * Takes precedence over launchSchema when defined.
    */
   static dynamicLaunchSchema?: () => ConfigSchema;
+  /**
+   * Optional cross-field coherence check, run synchronously on every config
+   * save (and at install) with the widget's would-be effective config.
+   * Throw a user-readable Error to refuse the save (e.g. "provider openai
+   * requires an API key", "model X does not belong to provider Y").
+   */
+  static validateConfig?: (config: Record<string, unknown>) => void;
+  /**
+   * Optional install-time check, run server-side on POST /install with the
+   * widget's effective config. Throw a user-readable Error to refuse the
+   * install (bad API key, unsupported platform, missing system consent…).
+   */
+  static validateInstall?: (config: Record<string, unknown>) => Promise<void> | void;
+  /**
+   * Browser capture sources this widget consumes (e.g. 'microphone').
+   * For data only the user's browser can produce: the portal renders a
+   * capture panel for each source on the widget's page and streams payloads
+   * to onMessage() while the widget runs. Source implementations live in the
+   * portal (public/app.js, `browserSources` registry).
+   */
+  static browserSources: string[] = [];
 
   /** Identifier = folder name under widgets/. Also used as application_name on the device. */
   readonly id: string;
@@ -95,6 +121,12 @@ export abstract class Widget {
 
   /** Called on shutdown (timers created via every() are already cleaned up). */
   async stop(): Promise<void> {}
+
+  /**
+   * Called when the portal POSTs to /api/widgets/<id>/message while the
+   * widget is running — e.g. live data captured in the browser (mic level).
+   */
+  onMessage?(payload: unknown): void;
 
   /**
    * Runs fn immediately, then every `ms` milliseconds.
@@ -151,7 +183,11 @@ export type WidgetClass = (new (ctx: WidgetContext) => Widget) & {
   title: string;
   description: string;
   order: number;
+  tags: string[];
   configSchema: ConfigSchema;
   launchSchema: ConfigSchema;
   dynamicLaunchSchema?: () => ConfigSchema;
+  validateConfig?: (config: Record<string, unknown>) => void;
+  validateInstall?: (config: Record<string, unknown>) => Promise<void> | void;
+  browserSources: string[];
 };

@@ -50,12 +50,12 @@ function sleep(ms: number): Promise<void> {
 export default class WeatherWidget extends Widget {
   static title = 'Weather';
   static description = 'Current conditions + forecast via Open-Meteo, full-screen rotating pages.';
+  static tags = ['weather', 'info'];
   static configSchema = {
     location: {
       type: 'location' as const,
       label: 'Location',
       required: true,
-      default: '48.8566,2.3522',
     },
   };
 

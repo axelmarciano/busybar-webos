@@ -1,9 +1,23 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import path from 'node:path';
 import { deviceFrameToBmp } from './frame';
+import { publicDir } from './paths';
 import { previewFile } from './core/preview';
 import { bar, BusyBarClient, type HttpAccessMode } from './busybar/client';
-import { getStoredConfig, setWidgetConfig } from './core/config';
+import {
+  clearWidgetConfig,
+  getEffectiveConfig,
+  getStoredConfig,
+  missingRequiredKeys,
+  setWidgetConfig,
+} from './core/config';
+import { installWidget, isInstalled, uninstallWidget } from './core/installed';
+import {
+  clearNotifications,
+  listNotifications,
+  NOTIFY_ICONS,
+  sendNotification,
+  type NotifyOptions,
+} from './core/notify';
 import { getLogs } from './core/logger';
 import { registry, resolveLaunchSchema } from './core/registry';
 import { runtime } from './core/runtime';
@@ -12,7 +26,7 @@ import { getSettings, updateSettings, type Settings } from './settings';
 export function createServer(): express.Express {
   const app = express();
   app.use(express.json());
-  app.use(express.static(path.resolve('public')));
+  app.use(express.static(publicDir));
 
   const wrap =
     (fn: (req: Request, res: Response) => Promise<void> | void) =>
@@ -27,7 +41,11 @@ export function createServer(): express.Express {
         id: def.id,
         title: def.title,
         description: def.description,
+        tags: def.tags,
+        installed: isInstalled(def.id),
+        config_ok: missingRequiredKeys(def.id, def.configSchema).length === 0,
         launchSchema: resolveLaunchSchema(def),
+        browser_sources: def.browserSources,
         has_preview: previewFile(def.id) !== null,
         ...runtime.statusOf(def.id),
       }))
@@ -44,13 +62,57 @@ export function createServer(): express.Express {
       id: def.id,
       title: def.title,
       description: def.description,
+      tags: def.tags,
+      installed: isInstalled(def.id),
+      missing_required: missingRequiredKeys(def.id, def.configSchema),
       configSchema: def.configSchema,
       launchSchema: resolveLaunchSchema(def),
+      browser_sources: def.browserSources,
       config: getStoredConfig(def.id),
       has_preview: previewFile(def.id) !== null,
       ...runtime.statusOf(def.id),
     });
   });
+
+  // Install = the widget appears in "Installed widgets" and becomes startable.
+  // Requires a valid config (all required fields set) AND the widget's own
+  // validateInstall() check when it defines one (LLM access, platform, consent…).
+  app.post('/api/widgets/:id/install', wrap(async (req, res) => {
+    const def = registry.get(req.params.id);
+    if (!def) {
+      res.status(404).json({ error: 'Unknown widget' });
+      return;
+    }
+    const missing = missingRequiredKeys(def.id, def.configSchema);
+    if (missing.length > 0) {
+      res.status(400).json({ error: `Configuration required before install: ${missing.join(', ')}` });
+      return;
+    }
+    try {
+      const effective = getEffectiveConfig(def.id, def.configSchema);
+      def.ctor.validateConfig?.(effective);
+      await def.ctor.validateInstall?.(effective);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    installWidget(def.id);
+    res.json({ result: 'OK' });
+  }));
+
+  // Uninstall also drops the widget's stored configuration
+  app.delete('/api/widgets/:id/install', wrap(async (req, res) => {
+    if (!registry.get(req.params.id)) {
+      res.status(404).json({ error: 'Unknown widget' });
+      return;
+    }
+    if (runtime.isRunning(req.params.id)) {
+      await runtime.stop(req.params.id).catch(() => {});
+    }
+    uninstallWidget(req.params.id);
+    clearWidgetConfig(req.params.id);
+    res.json({ result: 'OK' });
+  }));
 
   app.get('/api/widgets/:id/preview', (req, res) => {
     const file = previewFile(req.params.id);
@@ -72,6 +134,16 @@ export function createServer(): express.Express {
     res.json({ result: 'OK' });
   }));
 
+  app.post('/api/widgets/:id/message', (req, res) => {
+    try {
+      runtime.deliver(req.params.id, req.body ?? {});
+    } catch (err) {
+      res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    res.json({ result: 'OK' });
+  });
+
   app.put('/api/widgets/:id/config', (req, res) => {
     const def = registry.get(req.params.id);
     if (!def) {
@@ -79,7 +151,9 @@ export function createServer(): express.Express {
       return;
     }
     try {
-      setWidgetConfig(def.id, def.configSchema, req.body ?? {});
+      setWidgetConfig(def.id, def.configSchema, req.body ?? {}, (finalConfig) =>
+        def.ctor.validateConfig?.(finalConfig)
+      );
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
       return;
@@ -97,9 +171,26 @@ export function createServer(): express.Express {
     res.json(getSettings());
   });
 
-  app.put('/api/settings', (req, res) => {
-    res.json(updateSettings((req.body ?? {}) as Partial<Settings>));
-  });
+  // Connection changes are probed first — an unreachable configuration is never saved
+  const CONNECTION_KEYS: (keyof Settings)[] = [
+    'access_mode', 'local_url', 'wifi_url', 'cloud_url', 'cloud_token', 'api_token',
+  ];
+  app.put('/api/settings', wrap(async (req, res) => {
+    const patch = (req.body ?? {}) as Partial<Settings>;
+    if (CONNECTION_KEYS.some((key) => patch[key] !== undefined)) {
+      const candidate: Settings = { ...getSettings(), ...patch };
+      const probe = new BusyBarClient(() => candidate);
+      try {
+        await probe.version();
+      } catch {
+        res.status(400).json({
+          error: 'The bar is unreachable with this configuration — settings not saved',
+        });
+        return;
+      }
+    }
+    res.json(updateSettings(patch));
+  }));
 
   // --- Device proxy (for the portal) ---
   app.get('/api/device/status', wrap(async (_req, res) => {
@@ -130,6 +221,35 @@ export function createServer(): express.Express {
     if (mode === 'key' && key) updateSettings({ api_token: key });
     res.json({ result: 'OK' });
   }));
+
+  // Phone-style notification on the bar: icon + title + text, LED blink, sound
+  app.post('/api/notify', wrap(async (req, res) => {
+    const body = (req.body ?? {}) as Partial<NotifyOptions> & { text?: unknown };
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      res.status(400).json({ error: '"text" is required' });
+      return;
+    }
+    if (body.icon !== undefined && !NOTIFY_ICONS.includes(body.icon as never)) {
+      res.status(400).json({ error: `"icon" must be one of: ${NOTIFY_ICONS.join(', ')}` });
+      return;
+    }
+    try {
+      await sendNotification(body as NotifyOptions);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    res.json({ result: 'OK' });
+  }));
+
+  app.get('/api/notify', (req, res) => {
+    res.json(listNotifications(Number(req.query.limit) || 100));
+  });
+
+  app.delete('/api/notify', (_req, res) => {
+    clearNotifications();
+    res.json({ result: 'OK' });
+  });
 
   app.get('/api/device/screen', wrap(async (req, res) => {
     const display = req.query.display === '1' ? 1 : 0;

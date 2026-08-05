@@ -1,11 +1,11 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dataDir } from './paths';
 
-const DATA_DIR = path.resolve('data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(dataDir, { recursive: true });
 
-export const db = new Database(path.join(DATA_DIR, 'busybar.db'));
+export const db = new Database(path.join(dataDir, 'busybar.db'));
 db.pragma('journal_mode = WAL');
 
 db.exec(`
@@ -29,6 +29,21 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_widget_logs ON widget_logs (widget_id, id);
+
+  CREATE TABLE IF NOT EXISTS installed_widgets (
+    widget_id    TEXT PRIMARY KEY,
+    installed_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    icon       TEXT NOT NULL,
+    duration   INTEGER NOT NULL,
+    priority   INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 
   DROP TABLE IF EXISTS schedules;
 `);

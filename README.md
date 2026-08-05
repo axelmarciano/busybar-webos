@@ -10,6 +10,14 @@ A TypeScript "OS" for the [BUSY Bar](https://busy.bar) device: a widget runtime 
 
 ## Getting started
 
+Run it directly:
+
+```sh
+npx busybar-webos
+```
+
+Or from a clone:
+
 ```sh
 pnpm install
 pnpm dev        # dev server with reload
@@ -17,7 +25,7 @@ pnpm start      # plain start
 pnpm typecheck  # tsc --noEmit
 ```
 
-Data (SQLite DB) is stored in `data/busybar.db`, created automatically.
+Data (SQLite DB + your own widgets) lives in `~/.busybar-webos/` (override with `BUSYBAR_DATA_DIR`), created automatically. A git clone with an existing `data/busybar.db` keeps using `data/`. Custom widgets dropped in `~/.busybar-webos/widgets/<id>/` are loaded alongside the bundled ones and survive package updates.
 
 ## Writing a widget
 
@@ -83,7 +91,7 @@ Config field types:
 | `location` | "use my location" + text fallback | `"lat,lon"` |
 | `select` | dropdown (requires `options: [{value, label?}]`) | string (one of the option values) |
 
-Mark fields `required: true` to block start until they're set. Values are validated server-side on save — an invalid value (bad color, malformed coordinates, regex mismatch…) returns 400 and nothing is stored.
+Mark fields `required: true` to block install/start until the user explicitly sets them — a schema `default` does not satisfy a required field. Values are validated server-side on save — an invalid value (bad color, malformed coordinates, regex mismatch…) returns 400 and nothing is stored.
 
 ### Launch fields
 
@@ -101,12 +109,41 @@ Ideal ratio is 72:16 like the front display. No file, no preview.
 
 The front display is 72×16 px; keep drawings small. See the device OpenAPI spec for all element types (text, image, animation, countdown, rectangle).
 
+## Installing widgets
+
+The portal has two tabs: **Installed widgets** (startable) and **All widgets** (the catalog of everything in `widgets/`), with a search bar and tag filters. Widgets declare their categories with `static tags = ['music', 'fun']`.
+
+- A widget with no required config installs with one click on **Install**.
+- A widget with required config fields must have a valid configuration first: its page shows **Validate configuration** — if the values pass server-side validation, the widget becomes installed.
+- Widgets can define their own install checks: `static validateInstall(config)` runs server-side (e.g. AI Pixels pings the configured LLM, music widgets probe the desktop player and trigger the macOS automation consent), and browser sources (e.g. the Decibel widget's microphone) request their permission in the portal before installing.
+- **Uninstall** removes it from the installed list **and deletes its stored config**; only installed widgets can be started.
+
+## Notifications
+
+`POST /api/notify` shows a phone-style notification on the bar — icon on the left, title + scrolling text, LED blink in the icon's color, and a notification sound:
+
+```sh
+curl -X POST localhost:3000/api/notify -H 'Content-Type: application/json' \
+  -d '{"title": "Deploy done", "text": "busybar-webos v1.2 is live", "icon": "success"}'
+```
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `text` | — | required, printable ASCII |
+| `title` | none | bold first line; without it the text is centered |
+| `icon` | `info` | `info` `success` `warning` `error` `message` `bell` |
+| `duration` | `6` | seconds on screen (1-300) |
+| `priority` | `95` | 1-100 — 95 shows over a running BUSY session |
+| `sound` | on | `false` = silent, or a custom stock path (`shared/…`) |
+| `led` | icon color | `#RRGGBBAA` LED blink override |
+
 ## HTTP API
 
 The portal is a thin client over the server API:
 
 - `GET /api/widgets`, `GET /api/widgets/:id`
 - `POST /api/widgets/:id/start` (body: `{launch: {...}}` for widgets with a launchSchema), `POST /api/widgets/:id/stop`
+- `POST|DELETE /api/widgets/:id/install` — install (400 if required config missing) / uninstall
 - `PUT /api/widgets/:id/config`
 - `GET /api/widgets/:id/logs?limit=100`
 - `GET|PUT /api/settings`
