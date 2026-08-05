@@ -48,7 +48,7 @@ export function parseMovie(text: string): MovieFrame[] {
   let loopStart = -1;
   let loopCount = 0;
 
-  const DIRECTIVE = /^(FRAME|HOLD|PALETTE|LOOP|END|AGAIN|SPRITE|PUT)\b/i;
+  const DIRECTIVE = /^(FRAME|HOLD|PALETTE|LOOP|END|AGAIN|SPRITE|PUT|TEXT)\b/i;
 
   let i = 0;
   let inPalette = false;
@@ -84,6 +84,7 @@ export function parseMovie(text: string): MovieFrame[] {
       inPalette = false;
       i++;
       const puts: { name: string; x: number; y: number }[] = [];
+      const texts: TextCommand[] = [];
       const rawRows: string[] = [];
       let guard = 0;
       while (i < lines.length && guard++ < 64) {
@@ -91,12 +92,14 @@ export function parseMovie(text: string): MovieFrame[] {
         const t = row.trim();
         if (/^(FRAME|HOLD|PALETTE|LOOP|END|AGAIN|SPRITE)\b/i.test(t)) break; // next directive
         const put = t.match(/^PUT\s+(\S+)\s+(-?\d+)\s+(-?\d+)/i);
+        const text = t.match(/^TEXT\s+(-?\d+)\s+(-?\d+)\s+(\S)\s+(.+)$/i);
         if (put) puts.push({ name: put[1].toLowerCase(), x: Number(put[2]), y: Number(put[3]) });
+        else if (text) texts.push({ x: Number(text[1]), y: Number(text[2]), color: text[3], text: text[4] });
         else if (t !== '' && rawRows.length < SCREEN_H) rawRows.push(expandRow(row, rawRows[rawRows.length - 1]));
         i++;
       }
       const frame = {
-        pixels: rasterize(composeFrame(rawRows, puts, sprites), palette),
+        pixels: rasterize(composeFrame(rawRows, puts, texts, sprites), palette),
         durationMs: clampMs(frameMatch[1]),
       };
       frames.push(frame);
