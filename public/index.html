@@ -18,7 +18,9 @@
     </nav>
     <div class="device-panel">
       <div id="preview-wrap" class="preview-wrap hidden">
-        <img id="screen-preview" alt="" />
+        <div class="bar-frame">
+          <div class="bar-screen"><img id="screen-preview" alt="" /></div>
+        </div>
         <button id="preview-expand" class="expand-btn" title="Full screen">⛶</button>
       </div>
       <div id="device-status" class="device-status">
@@ -28,7 +30,9 @@
   </aside>
   <main id="app"></main>
   <div id="preview-overlay" class="preview-overlay hidden">
-    <img id="screen-preview-full" alt="" />
+    <div class="bar-frame overlay-frame">
+      <div class="bar-screen"><img id="screen-preview-full" alt="" /></div>
+    </div>
   </div>
   <div id="toast" class="toast hidden"></div>
   <script src="/app.js"></script>

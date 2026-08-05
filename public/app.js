@@ -90,9 +90,13 @@ async function renderWidgets() {
     <div class="grid">
       ${widgets.map((w) => `
         <div class="card">
-          ${w.has_preview
-            ? `<img class="preview" src="/api/widgets/${w.id}/preview" alt="" />`
-            : '<div class="preview preview-empty">no preview</div>'}
+          <div class="bar-frame">
+            <div class="bar-screen">
+              ${w.has_preview
+                ? `<img src="/api/widgets/${w.id}/preview" alt="" />`
+                : '<div class="screen-empty">no preview</div>'}
+            </div>
+          </div>
           <div class="head">
             <h3>${esc(w.title)}</h3>
             <span class="badge ${w.state}">${STATE_LABELS[w.state] || w.state}</span>
@@ -159,7 +163,9 @@ async function renderWidgetDetail(id) {
     </h1>
     <p style="color: var(--muted);">${esc(widget.description)}</p>
     ${widget.has_preview
-      ? `<img class="preview preview-detail" src="/api/widgets/${id}/preview" alt="" />`
+      ? `<div class="bar-frame detail-frame">
+          <div class="bar-screen"><img src="/api/widgets/${id}/preview" alt="" /></div>
+        </div>`
       : ''}
 
     ${hasConfig ? `
